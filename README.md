@@ -11,8 +11,7 @@ Local dashboard for the monthly context exports of [puffo-coach](https://github.
    uv run streamlit run app.py
    ```
 
-   The browser opens at http://localhost:8501. Use another folder with `PUFFO_DATA_DIR=/path uv run streamlit run app.py`
-   or the "Data folder" field in the sidebar.
+   The browser opens at http://localhost:8501. Use another folder with `PUFFO_DATA_DIR=/path uv run streamlit run app.py`.
 
 New or changed files are picked up automatically on the next page interaction.
 

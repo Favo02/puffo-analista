@@ -19,7 +19,7 @@ from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, li
 from puffo_analista.frames import Frames, build
 from puffo_analista.parse import Dataset, load_folder
 
-st.set_page_config(page_title="puffo-analista", page_icon="📈", layout="wide")
+st.set_page_config(page_title="puffo-analista", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
 DEFAULT_DATA_DIR = Path(os.environ.get("PUFFO_DATA_DIR", Path(__file__).parent / "data"))
 PLOT_CFG = {"displayModeBar": False}
@@ -49,20 +49,18 @@ def empty(msg="No data in the selected period."):
 
 
 # --------------------------------------------------------------------------- #
-# Sidebar
+# Header: title + period picker
 # --------------------------------------------------------------------------- #
 
-with st.sidebar:
-    st.header("puffo-analista")
-    folder = Path(st.text_input("Data folder", str(DEFAULT_DATA_DIR)))
-    if not folder.is_dir():
-        st.error(f"Folder not found: {folder}")
-        st.stop()
-    ds, F = load(str(folder), _folder_signature(folder))
+folder = DEFAULT_DATA_DIR
+st.title("puffo-analista")
+if not folder.is_dir():
+    st.error(f"Data folder not found: `{folder}`. Create it and paste your monthly `.md` exports there.")
+    st.stop()
+ds, F = load(str(folder), _folder_signature(folder))
 
 dates = F.all_dates()
 if dates.empty:
-    st.title("puffo-analista")
     st.warning(f"No data found in `{folder}`. Paste your monthly `.md` exports there.")
     for i in ds.issues:
         (st.error if i.level == "error" else st.warning)(f"**{i.file}** — {i.message}")
@@ -71,21 +69,20 @@ if dates.empty:
 first, last = dates.min().date(), dates.max().date()
 months = sorted({d.strftime("%Y-%m") for d in dates}, reverse=True)
 
-with st.sidebar:
-    period = st.selectbox("Period", ["All time", *months, "Custom range"])
-    if period == "All time":
-        start, end = first, last
-    elif period == "Custom range":
-        rng = st.date_input("Range", (first, last), min_value=first, max_value=last, format="YYYY-MM-DD")
-        start, end = (rng[0], rng[1]) if len(rng) == 2 else (rng[0], rng[0])
-    else:
-        p = pd.Period(period, "M")
-        start, end = p.start_time.date(), p.end_time.date()
-    st.caption(f"{start} → {end}")
-    st.divider()
-    st.caption(f"{len(ds.files)} file(s) loaded")
-    for f in ds.files:
-        st.caption(f"• {f.path.name}")
+c_period, c_range, c_info = st.columns([1, 1, 2], vertical_alignment="bottom")
+period = c_period.selectbox("Period", ["All time", *months, "Custom range"])
+if period == "All time":
+    start, end = first, last
+elif period == "Custom range":
+    rng = c_range.date_input("Range", (first, last), min_value=first, max_value=last, format="YYYY-MM-DD")
+    start, end = (rng[0], rng[1]) if len(rng) == 2 else (rng[0], rng[0])
+else:
+    p = pd.Period(period, "M")
+    start, end = p.start_time.date(), p.end_time.date()
+c_info.caption(
+    f"{start} → {end} · {len(ds.files)} file(s) loaded",
+    help="Files in `" + str(folder) + "`:\n\n" + "\n".join(f"- {f.path.name}" for f in ds.files),
+)
 
 theme = Theme(getattr(getattr(st.context, "theme", None), "type", None) or "light")
 P = F.filter(start, end)
@@ -93,10 +90,8 @@ n_days = (end - start).days + 1
 prev = F.filter(start - timedelta(days=n_days), start - timedelta(days=1)) if period != "All time" else None
 
 # --------------------------------------------------------------------------- #
-# Header + issues
+# Issues
 # --------------------------------------------------------------------------- #
-
-st.title("puffo-analista")
 
 errors = [i for i in ds.issues if i.level == "error"]
 warnings = [i for i in ds.issues if i.level == "warning"]
