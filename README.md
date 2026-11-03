@@ -57,6 +57,9 @@ Single-metric charts color every point/bar from red (poor) through amber to gree
 7.5–8.5 h of sleep, steps, SpO₂, PAI…) and your own all-time baseline otherwise (resting HR, HRV, VO₂max, pace…).
 The "How colors work" popover in the header lists them; tune the numbers there to taste.
 
+Behind every time series runs a smoothed trend (`puffo_analista/trend.py`, Gaussian kernel): its width adapts to
+the selected period (short-term in a month, seasonal over a year), and it is left empty across gaps in the data.
+
 ## Tests
 
 ```sh
