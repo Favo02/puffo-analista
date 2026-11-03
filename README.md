@@ -48,7 +48,8 @@ New or changed files are picked up automatically on the next page interaction.
   | Soccer, Padel, Tennis | as above, plus distance covered when the watch recorded it (never a pace) |
   | anything else | shown as gray "Other" (duration, HR, effort, distance) with a ⚠️ warning |
 - **Durations** are `MM:SS` or `HH:MM:SS`. The last km split is treated as a partial km (remaining distance).
-- **Meals** are parsed but not analysed yet.
+- **Meals** and **medicines** (`<medicine time="HH:MM">…</medicine>` inside a meals `<day>`) are parsed but not
+  analysed yet.
 
 ## Tests
 

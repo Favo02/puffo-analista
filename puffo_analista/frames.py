@@ -20,6 +20,7 @@ COLUMNS = {
     "splits": ["activity_id", "n", "time_s", "avg_hr", "elev_diff"],
     "hr_chunks": ["activity_id", "n", "start_s", "end_s", "avg_hr", "min_hr", "max_hr"],
     "meals": ["date", "day_idx", "time", "type", "text"],
+    "medicines": ["date", "day_idx", "time", "text"],
 }
 
 
@@ -32,6 +33,7 @@ class Frames:
     splits: pd.DataFrame
     hr_chunks: pd.DataFrame
     meals: pd.DataFrame
+    medicines: pd.DataFrame
 
     def filter(self, start, end) -> "Frames":
         """Restrict every table to dates in [start, end] (inclusive)."""
@@ -48,11 +50,12 @@ class Frames:
             splits=self.splits[self.splits["activity_id"].isin(ids)],
             hr_chunks=self.hr_chunks[self.hr_chunks["activity_id"].isin(ids)],
             meals=by_date(self.meals),
+            medicines=by_date(self.medicines),
         )
 
     def all_dates(self) -> pd.Series:
         return pd.concat(
-            [df["date"] for df in (self.vitals, self.sleep, self.activities, self.meals)]
+            [df["date"] for df in (self.vitals, self.sleep, self.activities, self.meals, self.medicines)]
         ).dropna()
 
 
@@ -109,4 +112,4 @@ def build(ds: Dataset) -> Frames:
     chunks = _df(ds, "hr_chunks").sort_values(["activity_id", "n"])
     chunks["mid_min"] = (chunks["start_s"] + chunks["end_s"]) / 2 / 60
 
-    return Frames(vitals, buckets, sleep, acts, splits, chunks, _df(ds, "meals"))
+    return Frames(vitals, buckets, sleep, acts, splits, chunks, _df(ds, "meals"), _df(ds, "medicines"))

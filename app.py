@@ -225,8 +225,9 @@ with tab_over:
                                  "%{y:.0f} bpm"))
             plot(date_axis(theme.layout(fig, "Resting heart rate (bpm)", legend=False)))
 
-    if not P.meals.empty:
-        st.caption(f"🍝 {len(P.meals)} meals recorded in this period — food analysis is coming later.")
+    if not (P.meals.empty and P.medicines.empty):
+        st.caption(f"🍝 {len(P.meals)} meals and 💊 {len(P.medicines)} medicine entries recorded in this period "
+                   "— food analysis is coming later.")
 
 # --------------------------------------------------------------------------- #
 # Sleep

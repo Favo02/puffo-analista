@@ -34,7 +34,10 @@ SCHEMA: dict[str, dict] = {
         children={
             "day": _node(
                 ["date"],
-                {"meal": _node(["time", "type"], text=True)},
+                {
+                    "meal": _node(["time", "type"], text=True),
+                    "medicine": _node(["time"], text=True),
+                },
             )
         }
     ),
@@ -111,6 +114,7 @@ class FileData:
     splits: list[dict] = field(default_factory=list)
     hr_chunks: list[dict] = field(default_factory=list)
     meals: list[dict] = field(default_factory=list)  # kept raw, not analysed yet
+    medicines: list[dict] = field(default_factory=list)  # kept raw, not analysed yet
 
 
 # --------------------------------------------------------------------------- #
@@ -318,6 +322,15 @@ def _extract_meals(root: ET.Element, fd: FileData, c: _Conv):
                 dict(date=d, day_idx=idx, time=m.get("time"), type=m.get("type"),
                      text=(m.text or "").strip())
             )
+        for m in day.findall("medicine"):
+            fd.medicines.append(
+                dict(date=d, day_idx=idx, time=m.get("time"), text=(m.text or "").strip())
+            )
+
+
+def _rows(fd: FileData, section: str) -> list[dict]:
+    """Records of a section; <medicine> entries live inside <meals> days."""
+    return fd.meals + fd.medicines if section == "meals" else getattr(fd, section)
 
 
 EXTRACTORS = {
@@ -383,7 +396,7 @@ def parse_file(path: Path, issues: list[Issue]) -> FileData | None:
 def _check_in_range(fd: FileData, issues: list[Issue]):
     for section in ("vitals", "sleep", "activities", "meals"):
         outside = sorted(
-            {str(r["date"]) for r in getattr(fd, section)
+            {str(r["date"]) for r in _rows(fd, section)
              if not fd.range_start <= r["date"] <= fd.range_end}
         )
         if outside:
@@ -399,7 +412,7 @@ def _check_in_range(fd: FileData, issues: list[Issue]):
 # --------------------------------------------------------------------------- #
 
 # section -> child tables keyed by parent id
-CHILD_TABLES = {"vitals": ["hr_buckets"], "activities": ["splits", "hr_chunks"]}
+CHILD_TABLES = {"vitals": ["hr_buckets"], "meals": ["medicines"], "activities": ["splits", "hr_chunks"]}
 
 
 @dataclass
@@ -420,7 +433,7 @@ def load_folder(folder: Path) -> Dataset:
     _check_range_overlap(files, issues)
 
     tables: dict[str, list[dict]] = {
-        k: [] for k in ("vitals", "hr_buckets", "sleep", "activities", "splits", "hr_chunks", "meals")
+        k: [] for k in ("vitals", "hr_buckets", "sleep", "activities", "splits", "hr_chunks", "meals", "medicines")
     }
 
     # Per-section duplicate detection on dates. Activities can legitimately be
@@ -430,9 +443,9 @@ def load_folder(folder: Path) -> Dataset:
         owners: dict[date, set[str]] = {}
         day_elems: dict[tuple[str, date], set] = {}
         for fd in files:
-            for i, r in enumerate(getattr(fd, section)):
+            for i, r in enumerate(_rows(fd, section)):
                 owners.setdefault(r["date"], set()).add(fd.path.name)
-                # one <day>/<night> element per row, except meals (many rows per <day>)
+                # one <day>/<night> element per row, except meals/medicines (many rows per <day>)
                 day_elems.setdefault((fd.path.name, r["date"]), set()).add(r.get("day_idx", i))
         counts = {k: len(v) for k, v in day_elems.items()}
 
@@ -458,7 +471,7 @@ def load_folder(folder: Path) -> Dataset:
             kept = [r for r in getattr(fd, section) if r["date"] not in bad]
             tables[section].extend(kept)
             for child in CHILD_TABLES.get(section, []):
-                if section == "vitals":
+                if section in ("vitals", "meals"):  # children keyed by date
                     tables[child].extend(r for r in getattr(fd, child) if r["date"] not in bad)
                 else:
                     ids = {r["id"] for r in kept}

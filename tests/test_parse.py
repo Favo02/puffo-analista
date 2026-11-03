@@ -81,6 +81,29 @@ def test_duplicate_day_inside_file(tmp_path):
     assert len([i for i in ds.issues if i.level == "error"]) == 1
 
 
+def test_medicine_entries(tmp_path):
+    write(tmp_path, "a.md", '<meals>'
+                            '<day date="2026-11-01"><meal time="08:00" type="colazione">latte</meal>'
+                            '<medicine time="08:05">ibuprofene 400mg</medicine></day>'
+                            '<day date="2026-11-02"><medicine time="22:00">melatonina</medicine></day>'
+                            '</meals>')
+    ds = load_folder(tmp_path)
+    assert ds.issues == []
+    assert [m["text"] for m in ds.tables["medicines"]] == ["ibuprofene 400mg", "melatonina"]
+    assert len(ds.tables["meals"]) == 1
+    F = build(ds)
+    assert len(F.medicines) == 2 and len(F.filter(date(2026, 11, 2), date(2026, 11, 2)).medicines) == 1
+
+
+def test_medicine_duplicated_across_files_is_dropped(tmp_path):
+    write(tmp_path, "a.md", '<meals><day date="2026-11-01"><medicine time="08:00">a</medicine></day></meals>')
+    write(tmp_path, "b.md", '<meals><day date="2026-11-01"><medicine time="09:00">b</medicine></day></meals>',
+          start="2026-12-01", end="2026-12-31")
+    ds = load_folder(tmp_path)
+    assert ds.tables["medicines"] == []
+    assert any(i.level == "error" and "multiple files" in i.message for i in ds.issues)
+
+
 def test_multiple_sleep_entries_same_date_are_valid(tmp_path):
     # asleep 00:40 on the 2nd, then again 23:30 on the 2nd: both dated 2026-11-02
     write(tmp_path, "a.md", '<sleep>'
