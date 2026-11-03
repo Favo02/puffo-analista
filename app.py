@@ -15,7 +15,8 @@ import streamlit as st
 
 from puffo_analista import fmt
 from puffo_analista.activities import BY_KEY, HIKE, KINDS, RIDE, RUN, Kind
-from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, line, pace_axis
+from puffo_analista import quality
+from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, pace_axis, quality_color, series
 from puffo_analista.frames import Frames, build
 from puffo_analista.parse import Dataset, load_folder
 
@@ -23,6 +24,9 @@ st.set_page_config(page_title="puffo-analista", page_icon="📈", layout="wide",
 
 DEFAULT_DATA_DIR = Path(os.environ.get("PUFFO_DATA_DIR", Path(__file__).parent / "data"))
 PLOT_CFG = {"displayModeBar": False}
+# Nightly bars sit at the fall-asleep time, which is irregular (two entries can share
+# a date), so plotly's automatic width collapses to hairlines: fix it to 18 h.
+NIGHT_BAR_MS = 18 * 3600 * 1000
 
 
 # --------------------------------------------------------------------------- #
@@ -40,8 +44,12 @@ def load(folder: str, _sig: tuple) -> tuple[Dataset, Frames]:
     return ds, build(ds)
 
 
+_chart_ids = iter(range(1_000_000))
+
+
 def plot(fig: go.Figure):
-    st.plotly_chart(fig, width="stretch", config=PLOT_CFG, theme=None)
+    # explicit key: the same chart may appear in two tabs (e.g. sleep score)
+    st.plotly_chart(fig, width="stretch", config=PLOT_CFG, theme=None, key=f"chart-{next(_chart_ids)}")
 
 
 def empty(msg="No data in the selected period."):
@@ -69,7 +77,21 @@ if dates.empty:
 first, last = dates.min().date(), dates.max().date()
 months = sorted({d.strftime("%Y-%m") for d in dates}, reverse=True)
 
-c_period, c_range, c_info = st.columns([1, 1, 2], vertical_alignment="bottom")
+c_period, c_range, c_info, c_colors = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
+with c_colors.popover("🎨 How colors work", width="stretch"):
+    st.markdown(
+        "Each point or bar is rated from **red** (poor) through **amber** (fair) to **green** (good); "
+        "hover shows the value and the rating. Metrics without a clear good/bad (e.g. training load, "
+        "heart rate during sessions) stay neutral.\n\n"
+        "**Fixed targets**\n"
+        "- Sleep score: 50 → 90\n- Sleep duration: 7.5–8.5 h best\n"
+        "- Bedtime: closer to 23:00 · Wake-up: closer to 08:00\n- Wakes: fewer is better\n"
+        "- SpO₂: 92% → 98%\n- Steps: 3k → 10k · Active minutes: 0 → 60 · PAI: 0 → 100\n\n"
+        "**Your own baseline** (all-time median ± 2 robust SD)\n"
+        "- Resting HR (day & night): lower is better\n- HRV, VO₂max: higher is better\n"
+        "- Respiratory rate: closer to your usual is better\n"
+        "- Run / hike pace, hike climb rate: faster is better · Ride speed: higher is better"
+    )
 period = c_period.selectbox("Period", ["All time", *months, "Custom range"])
 if period == "All time":
     start, end = first, last
@@ -140,6 +162,41 @@ def kind_dots(fig: go.Figure, df: pd.DataFrame, y: str, hover: str):
     return fig
 
 
+def INT(v):
+    return fmt.num(v)
+
+
+def BPM(v):
+    return fmt.num(v, 0, "bpm")
+
+
+def MS(v):
+    return fmt.num(v, 0, "ms")
+
+
+def STEPS(v):
+    return fmt.num(v, 0, "steps")
+
+
+def ts(df: pd.DataFrame, x: str, y: str, title: str, value_fmt, history: pd.DataFrame | None = None, *,
+       rule: str | None = "auto", color: str | None = None, bars: bool = False, height: int = 300,
+       asleep: bool = False, scale: float = 1.0) -> go.Figure:
+    """Single-metric time series, marks colored by quality.
+
+    `rule="auto"` uses the quality rule named like the column (if any); `history`
+    is the all-time table the personal baseline is computed from. `scale` changes
+    only the plotted unit (e.g. minutes → hours), never the rating.
+    """
+    key = y if rule == "auto" else rule
+    base = history[y] if history is not None and y in history else None
+    fig = go.Figure(series(theme, df, x, y, name=title.split(" (")[0], value_fmt=value_fmt, rule_key=key,
+                           baseline=base, color=color, bars=bars, scale=scale))
+    theme.layout(fig, title, height=height, legend=False)
+    if bars and asleep:
+        fig.update_traces(width=NIGHT_BAR_MS, selector=dict(type="bar"))
+    return date_axis(fig, asleep=asleep)
+
+
 def mean(df: pd.DataFrame, col: str):
     return df[col].mean() if not df.empty and df[col].notna().any() else None
 
@@ -201,24 +258,19 @@ with tab_over:
         if P.vitals.empty:
             empty()
         else:
-            fig = go.Figure(go.Bar(x=P.vitals["date"], y=P.vitals["steps"], marker_color=theme.slot(0),
-                                   hovertemplate="%{y:,} steps<extra></extra>"))
-            plot(date_axis(theme.layout(fig, "Daily steps", legend=False)))
+            plot(ts(P.vitals, "date", "steps", "Daily steps", STEPS, F.vitals, bars=True))
 
     left, right = st.columns(2)
     with left:
         if P.sleep.empty:
             empty()
         else:
-            fig = go.Figure(line(theme, P.sleep, "asleep_at", "score", "Sleep score", theme.slot(0)))
-            plot(date_axis(theme.layout(fig, "Sleep score", legend=False), asleep=True))
+            plot(ts(P.sleep, "asleep_at", "score", "Sleep score", INT, F.sleep, asleep=True))
     with right:
         if P.vitals.empty:
             empty()
         else:
-            fig = go.Figure(line(theme, P.vitals, "date", "resting_hr", "Resting HR", theme.slot(0),
-                                 "%{y:.0f} bpm"))
-            plot(date_axis(theme.layout(fig, "Resting heart rate (bpm)", legend=False)))
+            plot(ts(P.vitals, "date", "resting_hr", "Resting heart rate (bpm)", BPM, F.vitals))
 
     if not (P.meals.empty and P.medicines.empty):
         st.caption(f"🍝 {len(P.meals)} meals and 💊 {len(P.medicines)} medicine entries recorded in this period "
@@ -251,38 +303,52 @@ with tab_sleep:
 
         left, right = st.columns(2)
         with left:
-            fig = go.Figure(go.Bar(
-                x=S["asleep_at"], y=S["in_bed_min"], base=S["bed_min"], marker_color=theme.slot(0),
-                customdata=list(zip([fmt.clock(m) for m in S["bed_min"]], [fmt.clock(m) for m in S["end_min"]])),
-                hovertemplate="%{customdata[0]} → %{customdata[1]}<extra></extra>",
-            ))
-            theme.layout(fig, "Sleep window", legend=False)
-            clock_axis(fig, pd.concat([S["bed_min"], S["bed_min"] + S["in_bed_min"]]), step=120)
+            # Neutral bar = time in bed; the two ends are rated: bedtime vs 23:00, wake-up vs 08:00.
+            wake_pos = S["bed_min"] + S["in_bed_min"]
+            bed_s = quality.score(quality.RULES["bed_min"], S["bed_min"])
+            wake_s = quality.score(quality.RULES["end_min"], S["end_min"])
+            fig = go.Figure([
+                go.Bar(x=S["asleep_at"], y=S["in_bed_min"], base=S["bed_min"], marker_color=theme.ink["grid"],
+                       hoverinfo="skip", width=NIGHT_BAR_MS),
+                go.Scatter(x=S["asleep_at"], y=S["bed_min"], mode="markers", name="Bedtime",
+                           marker=dict(size=9, color=[quality_color(s, theme.slot(0)) for s in bed_s],
+                                       line=dict(width=1.5, color=theme.ink["surface"])),
+                           customdata=[[fmt.clock(m), quality.label(s)] for m, s in zip(S["bed_min"], bed_s)],
+                           hovertemplate="asleep %{customdata[0]} · %{customdata[1]}<extra></extra>"),
+                go.Scatter(x=S["asleep_at"], y=wake_pos, mode="markers", name="Wake-up",
+                           marker=dict(size=9, symbol="diamond",
+                                       color=[quality_color(s, theme.slot(0)) for s in wake_s],
+                                       line=dict(width=1.5, color=theme.ink["surface"])),
+                           customdata=[[fmt.clock(m), quality.label(s)] for m, s in zip(S["end_min"], wake_s)],
+                           hovertemplate="awake %{customdata[0]} · %{customdata[1]}<extra></extra>"),
+            ])
+            theme.layout(fig, "Sleep window (● asleep vs 23:00, ◆ awake vs 08:00)", legend=False, hover="closest")
+            clock_axis(fig, pd.concat([S["bed_min"], wake_pos]), step=120)
             fig.update_yaxes(autorange="reversed")
             plot(date_axis(fig, asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "asleep_at", "score", "Score", theme.slot(0)))
-            plot(date_axis(theme.layout(fig, "Sleep score", legend=False), asleep=True))
+            plot(ts(S, "asleep_at", "total_min", "Sleep duration (h)", fmt.hours_minutes, F.sleep, asleep=True,
+                    scale=1 / 60))
 
         left, right = st.columns(2)
         with left:
-            fig = go.Figure(line(theme, S, "asleep_at", "sleep_hrv", "HRV", theme.slot(0), "%{y:.0f} ms"))
-            plot(date_axis(theme.layout(fig, "Overnight HRV (ms)", legend=False), asleep=True))
+            plot(ts(S, "asleep_at", "score", "Sleep score", INT, F.sleep, asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "asleep_at", "sleep_rhr", "RHR", theme.slot(0), "%{y:.0f} bpm"))
-            plot(date_axis(theme.layout(fig, "Overnight resting HR (bpm)", legend=False), asleep=True))
+            plot(ts(S, "asleep_at", "sleep_hrv", "Overnight HRV (ms)", MS, F.sleep, asleep=True))
 
-        left, mid, right = st.columns(3)
+        left, right = st.columns(2)
         with left:
-            fig = go.Figure(go.Bar(x=S["asleep_at"], y=S["wakes"], marker_color=theme.slot(0),
-                                   hovertemplate="%{y:.0f} wakes<extra></extra>"))
-            plot(date_axis(theme.layout(fig, "Wakes per night", height=240, legend=False), asleep=True))
-        with mid:
-            fig = go.Figure(line(theme, S, "asleep_at", "resp_rate", "Resp. rate", theme.slot(0), "%{y:.1f} br/min"))
-            plot(date_axis(theme.layout(fig, "Respiratory rate (br/min)", height=240, legend=False), asleep=True))
+            plot(ts(S, "asleep_at", "sleep_rhr", "Overnight resting HR (bpm)", BPM, F.sleep, asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "asleep_at", "spo2_night", "SpO₂", theme.slot(0), "%{y:.0f}%"))
-            plot(date_axis(theme.layout(fig, "Night SpO₂ (%)", height=240, legend=False), asleep=True))
+            plot(ts(S, "asleep_at", "wakes", "Wakes per night", INT, F.sleep, bars=True, asleep=True))
+
+        left, right = st.columns(2)
+        with left:
+            plot(ts(S, "asleep_at", "resp_rate", "Respiratory rate (br/min)", lambda v: fmt.num(v, 1, "br/min"),
+                    F.sleep, height=260, asleep=True))
+        with right:
+            plot(ts(S, "asleep_at", "spo2_night", "Night SpO₂ (%)", lambda v: fmt.num(v, 0, "%"),
+                    F.sleep, height=260, asleep=True))
 
         with st.expander("Table"):
             t = S.assign(
@@ -311,26 +377,20 @@ with tab_vitals:
         c[4].metric("Latest PAI", fmt.num(pai["pai_total"].iloc[-1], 0) if not pai.empty else "–")
 
         charts = [
-            ("resting_hr", "Resting HR (bpm)", "%{y:.0f} bpm", "line"),
-            ("steps", "Steps", "%{y:,} steps", "bar"),
-            ("training_load", "Training load", "%{y:.0f}", "line"),
-            ("active_minutes", "Active minutes", "%{y:.0f} min", "bar"),
-            ("vo2max", "VO₂max", "%{y:.1f}", "line"),
-            ("pai_total", "PAI (total)", "%{y:.1f}", "line"),
+            ("resting_hr", "Resting HR (bpm)", BPM, False),
+            ("steps", "Steps", STEPS, True),
+            ("training_load", "Training load", INT, False),  # no good/bad: stays neutral
+            ("active_minutes", "Active minutes", lambda v: fmt.num(v, 0, "min"), True),
+            ("vo2max", "VO₂max", lambda v: fmt.num(v, 1), False),
+            ("pai_total", "PAI (total)", lambda v: fmt.num(v, 1), False),
         ]
         for pair in (charts[i:i + 2] for i in range(0, len(charts), 2)):
-            for col, (key, title, hv, kind) in zip(st.columns(2), pair):
+            for col, (key, title, value_fmt, bars) in zip(st.columns(2), pair):
                 with col:
-                    d = V.dropna(subset=[key])
-                    if d.empty:
+                    if V[key].dropna().empty:
                         empty(f"No {title} data in this period.")
                         continue
-                    if kind == "bar":
-                        fig = go.Figure(go.Bar(x=d["date"], y=d[key], marker_color=theme.slot(0),
-                                               hovertemplate=hv + "<extra></extra>"))
-                    else:
-                        fig = go.Figure(line(theme, d, "date", key, title, theme.slot(0), hv))
-                    plot(date_axis(theme.layout(fig, title, height=260, legend=False)))
+                    plot(ts(V, "date", key, title, value_fmt, F.vitals, bars=bars, height=260))
 
         B = P.hr_buckets
         if not B.empty:
@@ -415,38 +475,30 @@ with tab_act:
             hike = A[(A["kind"] == HIKE.key) & A["pace_s_km"].notna()]
             if not (run.empty and ride.empty and hike.empty):
                 st.subheader("Run, ride & hike")
+                # baselines: all-time sessions of the same kind
+                hist = {k.key: F.activities[F.activities["kind"] == k.key] for k in (RUN, RIDE, HIKE)}
                 trend_cols = st.columns(3)
                 with trend_cols[0]:
                     if not run.empty:
-                        fig = go.Figure(line(theme, run, "date", "pace_s_km", "Pace", theme.kind_color(RUN.key),
-                                             "%{customdata}"))
-                        fig.data[0].customdata = run["pace_s_km"].map(fmt.pace)
-                        theme.layout(fig, "Run pace", height=260, legend=False)
-                        plot(date_axis(pace_axis(fig, run["pace_s_km"])))
-                        fig = go.Figure(line(theme, run, "date", "avg_hr", "Avg HR", theme.kind_color(RUN.key),
-                                             "%{y:.0f} bpm"))
-                        plot(date_axis(theme.layout(fig, "Run average HR (bpm)", height=260, legend=False)))
+                        fig = ts(run, "date", "pace_s_km", "Run pace", fmt.pace, hist["run"],
+                                 rule="run_pace", height=260)
+                        plot(pace_axis(fig, run["pace_s_km"]))
+                        plot(ts(run, "date", "avg_hr", "Run average HR (bpm)", BPM, rule=None,
+                                color=theme.kind_color(RUN.key), height=260))
                 with trend_cols[1]:
                     if not ride.empty:
-                        fig = go.Figure(line(theme, ride, "date", "speed_kmh", "Speed", theme.kind_color(RIDE.key),
-                                             "%{y:.1f} km/h"))
-                        plot(date_axis(theme.layout(fig, "Ride speed (km/h)", height=260, legend=False)))
-                        fig = go.Figure(line(theme, ride, "date", "avg_hr", "Avg HR", theme.kind_color(RIDE.key),
-                                             "%{y:.0f} bpm"))
-                        plot(date_axis(theme.layout(fig, "Ride average HR (bpm)", height=260, legend=False)))
+                        plot(ts(ride, "date", "speed_kmh", "Ride speed (km/h)", fmt.speed, hist["ride"],
+                                rule="ride_speed", height=260))
+                        plot(ts(ride, "date", "avg_hr", "Ride average HR (bpm)", BPM, rule=None,
+                                color=theme.kind_color(RIDE.key), height=260))
                 with trend_cols[2]:
                     if not hike.empty:
-                        fig = go.Figure(line(theme, hike, "date", "pace_s_km", "Pace", theme.kind_color(HIKE.key),
-                                             "%{customdata}"))
-                        fig.data[0].customdata = hike["pace_s_km"].map(fmt.pace)
-                        theme.layout(fig, "Hike pace", height=260, legend=False)
-                        plot(date_axis(pace_axis(fig, hike["pace_s_km"])))
-                        h2 = hike.dropna(subset=["elev_pace"])
-                        if not h2.empty:
-                            fig = go.Figure(line(theme, h2, "date", "elev_pace", "Climb", theme.kind_color(HIKE.key),
-                                                 "%{y:.1f} min/100m"))
-                            plot(date_axis(theme.layout(fig, "Hike climb rate (min/100m elev)", height=260,
-                                                        legend=False)))
+                        fig = ts(hike, "date", "pace_s_km", "Hike pace", fmt.pace, hist["hike"],
+                                 rule="hike_pace", height=260)
+                        plot(pace_axis(fig, hike["pace_s_km"]))
+                        if hike["elev_pace"].notna().any():
+                            plot(ts(hike, "date", "elev_pace", "Hike climb rate (min/100m elev)", fmt.elev_pace,
+                                    hist["hike"], rule="hike_climb", height=260))
 
             # ---- Time-based sports (workout, soccer, padel, tennis, volleyball, other)
             sports = A[~A["kind"].map(lambda k: BY_KEY[k].endurance)]

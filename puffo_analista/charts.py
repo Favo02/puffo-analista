@@ -11,7 +11,7 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 
-from . import fmt
+from . import fmt, quality
 from .activities import BY_KEY
 
 PALETTE = {
@@ -114,10 +114,49 @@ def pace_axis(fig: go.Figure, values: pd.Series, axis="y"):
     return fig
 
 
-def line(theme: Theme, df: pd.DataFrame, x: str, y: str, name: str, color: str,
-         hover_fmt: str = "%{y}", markers: bool = True) -> go.Scatter:
-    return go.Scatter(
-        x=df[x], y=df[y], name=name, mode="lines+markers" if markers else "lines",
-        line=dict(color=color, width=2), marker=dict(size=8, line=dict(width=2, color=theme.ink["surface"])),
-        connectgaps=True, hovertemplate=f"{hover_fmt}<extra>{name}</extra>",
-    )
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def quality_color(s: float, fallback: str) -> str:
+    """Interpolate the red → green quality scale at s in [0, 1]."""
+    if s != s:  # NaN: no rating available
+        return fallback
+    for (p0, c0), (p1, c1) in zip(quality.SCALE, quality.SCALE[1:]):
+        if s <= p1:
+            t = (s - p0) / (p1 - p0)
+            r0, g0, b0 = _hex_to_rgb(c0)
+            r1, g1, b1 = _hex_to_rgb(c1)
+            return f"#{round(r0 + (r1 - r0) * t):02x}{round(g0 + (g1 - g0) * t):02x}{round(b0 + (b1 - b0) * t):02x}"
+    return quality.SCALE[-1][1]
+
+
+def series(theme: Theme, df: pd.DataFrame, x: str, y: str, *, name: str, value_fmt,
+           rule_key: str | None = None, baseline: pd.Series | None = None,
+           color: str | None = None, bars: bool = False, scale: float = 1.0) -> list:
+    """A time series whose points (or bars) are colored by how good each value is.
+
+    `rule_key` picks a rule from `quality.RULES`; `baseline` is the history used by
+    personal-baseline rules (pass all-time data so colors don't change with the
+    selected period). Without a rule, every mark uses `color`.
+    """
+    d = df.dropna(subset=[y])
+    base_color = color or theme.slot(0)
+    rule = quality.RULES.get(rule_key) if rule_key else None
+    scores = quality.score(rule, d[y], baseline)
+    colors = [quality_color(s, base_color) for s in scores]
+    note = quality.describe(rule_key) if rule_key else ""
+    rating = [f"<br>{quality.label(s)} · {note}" if s == s else "" for s in scores]
+    custom = list(zip([value_fmt(v) for v in d[y]], rating))
+    hover = "%{customdata[0]}%{customdata[1]}<extra>" + name + "</extra>"
+    ys = d[y] * scale
+
+    if bars:
+        return [go.Bar(x=d[x], y=ys, name=name, marker_color=colors, customdata=custom, hovertemplate=hover)]
+    return [go.Scatter(
+        x=d[x], y=ys, name=name, mode="lines+markers",
+        # with a rule the connecting line stays neutral and the markers carry the rating
+        line=dict(color=theme.ink["axis"] if rule else base_color, width=1.5 if rule else 2),
+        marker=dict(size=8, color=colors, line=dict(width=1.5, color=theme.ink["surface"])),
+        customdata=custom, hovertemplate=hover,
+    )]

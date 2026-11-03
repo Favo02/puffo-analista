@@ -50,6 +50,13 @@ New or changed files are picked up automatically on the next page interaction.
 - **Meals** and **medicines** (`<medicine time="HH:MM">…</medicine>` inside a meals `<day>`) are parsed but not
   analysed yet.
 
+## Colors
+
+Single-metric charts color every point/bar from red (poor) through amber to green (good), using the rules in
+`puffo_analista/quality.py`: fixed targets where they exist (sleep score, bedtime ≈ 23:00, wake-up ≈ 08:00,
+7.5–8.5 h of sleep, steps, SpO₂, PAI…) and your own all-time baseline otherwise (resting HR, HRV, VO₂max, pace…).
+The "How colors work" popover in the header lists them; tune the numbers there to taste.
+
 ## Tests
 
 ```sh
