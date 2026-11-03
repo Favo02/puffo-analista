@@ -110,6 +110,11 @@ theme = Theme(getattr(getattr(st.context, "theme", None), "type", None) or "ligh
 P = F.filter(start, end)
 n_days = (end - start).days + 1
 prev = F.filter(start - timedelta(days=n_days), start - timedelta(days=1)) if period != "All time" else None
+# Only compare with the previous period if it is mostly covered by data (e.g. not a missing month).
+prev_days = 0 if prev is None else pd.concat([prev.vitals["date"], prev.sleep["date"]]).nunique()
+prev_sparse = prev is not None and prev_days < n_days / 2
+if prev_sparse:
+    prev = None
 
 # --------------------------------------------------------------------------- #
 # Issues
@@ -231,6 +236,8 @@ with tab_over:
                 help="Total moving time of all activities")
     if prev is not None:
         st.caption(f"Deltas compare with the previous {n_days} days.")
+    elif prev_sparse:
+        st.caption(f"No deltas: the previous {n_days} days have data on only {prev_days} day(s).")
 
     if not P.activities.empty:
         # Endurance kinds headline their distance, sports their time.
