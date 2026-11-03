@@ -295,7 +295,8 @@ with tab_sleep:
         fig = go.Figure()
         for i, (col, name) in enumerate(SLEEP_STAGES):
             fig.add_bar(x=S["asleep_at"], y=S[col] / 60, name=name, marker_color=theme.slot(i),
-                        marker_line=theme.bar_gap_line(),
+                        # the 2px gap would swallow bars only a few px wide over long periods
+                        marker_line=theme.bar_gap_line() if len(S) <= 60 else dict(width=0), width=NIGHT_BAR_MS,
                         customdata=[fmt.hours_minutes(m) for m in S[col]],
                         hovertemplate="%{customdata}<extra>" + name + "</extra>")
         theme.layout(fig, "Sleep stages (hours)", height=340).update_layout(barmode="stack")
