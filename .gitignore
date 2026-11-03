@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+# personal data
+data/*
+!data/.gitkeep
+/context_*.md

@@ -1,0 +1,18 @@
+[project]
+name = "puffo-analista"
+version = "0.1.0"
+description = "Local dashboard for puffo-coach monthly context exports"
+requires-python = ">=3.14"
+dependencies = [
+    "pandas>=3.1.0",
+    "plotly>=7.1.0",
+    "streamlit>=1.66.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
