@@ -197,8 +197,8 @@ with tab_over:
         if P.sleep.empty:
             empty()
         else:
-            fig = go.Figure(line(theme, P.sleep, "date", "score", "Sleep score", theme.slot(0)))
-            plot(date_axis(theme.layout(fig, "Sleep score", legend=False)))
+            fig = go.Figure(line(theme, P.sleep, "asleep_at", "score", "Sleep score", theme.slot(0)))
+            plot(date_axis(theme.layout(fig, "Sleep score", legend=False), asleep=True))
     with right:
         if P.vitals.empty:
             empty()
@@ -228,47 +228,47 @@ with tab_sleep:
 
         fig = go.Figure()
         for i, (col, name) in enumerate(SLEEP_STAGES):
-            fig.add_bar(x=S["date"], y=S[col] / 60, name=name, marker_color=theme.slot(i),
+            fig.add_bar(x=S["asleep_at"], y=S[col] / 60, name=name, marker_color=theme.slot(i),
                         marker_line=theme.bar_gap_line(),
                         customdata=[fmt.hours_minutes(m) for m in S[col]],
                         hovertemplate="%{customdata}<extra>" + name + "</extra>")
         theme.layout(fig, "Sleep stages (hours)", height=340).update_layout(barmode="stack")
-        plot(date_axis(fig))
+        plot(date_axis(fig, asleep=True))
 
         left, right = st.columns(2)
         with left:
             fig = go.Figure(go.Bar(
-                x=S["date"], y=S["in_bed_min"], base=S["bed_min"], marker_color=theme.slot(0),
+                x=S["asleep_at"], y=S["in_bed_min"], base=S["bed_min"], marker_color=theme.slot(0),
                 customdata=list(zip([fmt.clock(m) for m in S["bed_min"]], [fmt.clock(m) for m in S["end_min"]])),
                 hovertemplate="%{customdata[0]} → %{customdata[1]}<extra></extra>",
             ))
             theme.layout(fig, "Sleep window", legend=False)
             clock_axis(fig, pd.concat([S["bed_min"], S["bed_min"] + S["in_bed_min"]]), step=120)
             fig.update_yaxes(autorange="reversed")
-            plot(date_axis(fig))
+            plot(date_axis(fig, asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "date", "score", "Score", theme.slot(0)))
-            plot(date_axis(theme.layout(fig, "Sleep score", legend=False)))
+            fig = go.Figure(line(theme, S, "asleep_at", "score", "Score", theme.slot(0)))
+            plot(date_axis(theme.layout(fig, "Sleep score", legend=False), asleep=True))
 
         left, right = st.columns(2)
         with left:
-            fig = go.Figure(line(theme, S, "date", "sleep_hrv", "HRV", theme.slot(0), "%{y:.0f} ms"))
-            plot(date_axis(theme.layout(fig, "Overnight HRV (ms)", legend=False)))
+            fig = go.Figure(line(theme, S, "asleep_at", "sleep_hrv", "HRV", theme.slot(0), "%{y:.0f} ms"))
+            plot(date_axis(theme.layout(fig, "Overnight HRV (ms)", legend=False), asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "date", "sleep_rhr", "RHR", theme.slot(0), "%{y:.0f} bpm"))
-            plot(date_axis(theme.layout(fig, "Overnight resting HR (bpm)", legend=False)))
+            fig = go.Figure(line(theme, S, "asleep_at", "sleep_rhr", "RHR", theme.slot(0), "%{y:.0f} bpm"))
+            plot(date_axis(theme.layout(fig, "Overnight resting HR (bpm)", legend=False), asleep=True))
 
         left, mid, right = st.columns(3)
         with left:
-            fig = go.Figure(go.Bar(x=S["date"], y=S["wakes"], marker_color=theme.slot(0),
+            fig = go.Figure(go.Bar(x=S["asleep_at"], y=S["wakes"], marker_color=theme.slot(0),
                                    hovertemplate="%{y:.0f} wakes<extra></extra>"))
-            plot(date_axis(theme.layout(fig, "Wakes per night", height=240, legend=False)))
+            plot(date_axis(theme.layout(fig, "Wakes per night", height=240, legend=False), asleep=True))
         with mid:
-            fig = go.Figure(line(theme, S, "date", "resp_rate", "Resp. rate", theme.slot(0), "%{y:.1f} br/min"))
-            plot(date_axis(theme.layout(fig, "Respiratory rate (br/min)", height=240, legend=False)))
+            fig = go.Figure(line(theme, S, "asleep_at", "resp_rate", "Resp. rate", theme.slot(0), "%{y:.1f} br/min"))
+            plot(date_axis(theme.layout(fig, "Respiratory rate (br/min)", height=240, legend=False), asleep=True))
         with right:
-            fig = go.Figure(line(theme, S, "date", "spo2_night", "SpO₂", theme.slot(0), "%{y:.0f}%"))
-            plot(date_axis(theme.layout(fig, "Night SpO₂ (%)", height=240, legend=False)))
+            fig = go.Figure(line(theme, S, "asleep_at", "spo2_night", "SpO₂", theme.slot(0), "%{y:.0f}%"))
+            plot(date_axis(theme.layout(fig, "Night SpO₂ (%)", height=240, legend=False), asleep=True))
 
         with st.expander("Table"):
             t = S.assign(

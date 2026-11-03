@@ -32,7 +32,10 @@ New or changed files are picked up automatically on the next page interaction.
   as a ⚠️ warning at the top of the dashboard: a hint that puffo-analista needs an update.
 - **Duplicates**: if the same day appears in more than one file (or twice in the same file) for a section, that day
   is **not loaded** for that section and a ⛔ error is shown. Overlapping header date ranges are also reported.
-- **Sleep date** is the day you fell asleep (23:30 on the 5th → date 5th; 00:45 on the 6th → date 6th).
+- **Sleep date** is the day you fell asleep (23:30 on the 5th → date 5th; 00:45 on the 6th → date 6th). A date can
+  therefore hold several sleep entries (asleep at 00:45 and again at 23:30): they are all valid, and sleep charts
+  are placed at the fall-asleep time. Only an entry repeated with the same start time is a duplicate (not loaded);
+  overlapping entries are warned about.
 - **Durations** are `MM:SS` or `HH:MM:SS`. The last km split is treated as a partial km (remaining distance).
 - **Meals** are parsed but not analysed yet.
 

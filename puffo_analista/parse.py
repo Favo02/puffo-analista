@@ -419,8 +419,9 @@ def load_folder(folder: Path) -> Dataset:
         k: [] for k in ("vitals", "hr_buckets", "sleep", "activities", "splits", "hr_chunks", "meals")
     }
 
-    # Per-section duplicate detection on dates. Activities can legitimately
-    # be several per day, but only within a single file.
+    # Per-section duplicate detection on dates. Activities can legitimately be
+    # several per day, and so can sleep entries (asleep at 00:30 and again at
+    # 23:30 of the same day), but only within a single file.
     for section in ("vitals", "sleep", "activities", "meals"):
         owners: dict[date, set[str]] = {}
         day_elems: dict[tuple[str, date], set] = {}
@@ -439,13 +440,15 @@ def load_folder(folder: Path) -> Dataset:
                     Issue("error", ", ".join(sorted(fs)),
                           f"{section} for {d} present in multiple files; data for that day NOT loaded")
                 )
-        if section in ("vitals", "sleep", "meals"):
+        if section in ("vitals", "meals"):
             for (f, d), n in counts.items():
                 if n > 1 and d not in bad:
                     bad.add(d)
                     issues.append(
                         Issue("error", f, f"{section} for {d} appears {n} times; data for that day NOT loaded")
                     )
+        if section == "sleep":
+            bad |= _check_sleep_entries(files, bad, issues)
 
         for fd in files:
             kept = [r for r in getattr(fd, section) if r["date"] not in bad]
@@ -458,6 +461,47 @@ def load_folder(folder: Path) -> Dataset:
                     tables[child].extend(r for r in getattr(fd, child) if r["activity_id"] in ids)
 
     return Dataset(files=files, issues=issues, tables=tables)
+
+
+def _check_sleep_entries(files: list[FileData], already_bad: set[date], issues: list[Issue]) -> set[date]:
+    """Several sleep entries per date are valid; the same one repeated is not.
+
+    Returns the dates to drop (an entry with the same date and start time
+    appears twice). Entries whose time intervals overlap are only warned about.
+    """
+    bad: set[date] = set()
+    for fd in files:
+        seen: dict[tuple, int] = {}
+        for r in fd.sleep:
+            key = (r["date"], r["start_min"])
+            seen[key] = seen.get(key, 0) + 1
+        for (d, start), n in seen.items():
+            if n > 1 and d not in already_bad and d not in bad:
+                bad.add(d)
+                issues.append(
+                    Issue("error", fd.path.name,
+                          f"sleep for {d} starting at {_hhmm(start)} appears {n} times; "
+                          "sleep for that day NOT loaded")
+                )
+
+        spans = sorted(
+            (s, e, r["date"])
+            for r in fd.sleep
+            if r["date"] not in already_bad | bad
+            for s, e in [sleep_datetimes(r["date"], r["start_min"], r["end_min"])]
+            if s is not None and e is not None
+        )
+        for (s1, e1, d1), (s2, _, d2) in zip(spans, spans[1:]):
+            if s2 < e1:
+                issues.append(
+                    Issue("warning", fd.path.name,
+                          f"sleep entries of {d1} ({s1:%H:%M}–{e1:%H:%M}) and {d2} (from {s2:%H:%M}) overlap")
+                )
+    return bad
+
+
+def _hhmm(minutes: int | None) -> str:
+    return "?" if minutes is None else f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def _check_range_overlap(files: list[FileData], issues: list[Issue]):

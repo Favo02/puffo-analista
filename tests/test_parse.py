@@ -81,6 +81,30 @@ def test_duplicate_day_inside_file(tmp_path):
     assert len([i for i in ds.issues if i.level == "error"]) == 1
 
 
+def test_multiple_sleep_entries_same_date_are_valid(tmp_path):
+    # asleep 00:40 on the 2nd, then again 23:30 on the 2nd: both dated 2026-11-02
+    write(tmp_path, "a.md", '<sleep>'
+                            '<night date="2026-11-02" score="70" start="00:40" end="08:30"/>'
+                            '<night date="2026-11-02" score="80" start="23:30" end="07:10"/>'
+                            '</sleep>')
+    ds = load_folder(tmp_path)
+    assert ds.issues == []
+    F = build(ds)
+    assert F.sleep["score"].tolist() == [70, 80]
+    assert F.sleep["asleep_at"].dt.strftime("%Y-%m-%d %H:%M").tolist() == ["2026-11-02 00:40", "2026-11-02 23:30"]
+    assert F.sleep["bed_min"].tolist() == [40, -30]
+
+
+def test_overlapping_sleep_entries_warn(tmp_path):
+    write(tmp_path, "a.md", '<sleep>'
+                            '<night date="2026-11-01" start="23:00" end="07:00"/>'
+                            '<night date="2026-11-02" start="06:00" end="09:00"/>'
+                            '</sleep>')
+    ds = load_folder(tmp_path)
+    assert [i.level for i in ds.issues] == ["warning"] and "overlap" in ds.issues[0].message
+    assert len(ds.tables["sleep"]) == 2
+
+
 def test_ampersand_and_hike_and_long_duration(tmp_path):
     write(tmp_path, "a.md", """<meals><day date="2026-11-01"><meal time="08:00" type="colazione">pane & burro</meal></day></meals>
 <activities>

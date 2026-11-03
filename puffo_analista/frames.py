@@ -66,7 +66,11 @@ def build(ds: Dataset) -> Frames:
     vitals = _df(ds, "vitals").sort_values("date")
     buckets = _df(ds, "hr_buckets").sort_values(["date", "start_min"])
 
-    sleep = _df(ds, "sleep").sort_values("date")
+    sleep = _df(ds, "sleep")
+    # A date can hold several sleep entries (asleep at 00:30 and again at 23:30),
+    # so nightly charts are keyed by the moment you fell asleep, not the date.
+    sleep["asleep_at"] = sleep["date"] + pd.to_timedelta(sleep["start_min"].fillna(0), unit="min")
+    sleep = sleep.sort_values("asleep_at", kind="stable").reset_index(drop=True)
     # Bedtime on a continuous axis around midnight: 23:30 -> -30, 00:45 -> 45.
     sleep["bed_min"] = sleep["start_min"].where(sleep["start_min"] < 12 * 60, sleep["start_min"] - 1440)
     sleep["in_bed_min"] = (sleep["end_min"] - sleep["start_min"]) % 1440

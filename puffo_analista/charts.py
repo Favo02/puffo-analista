@@ -77,8 +77,9 @@ class Theme:
         return dict(width=2, color=self.ink["surface"])
 
 
-def date_axis(fig: go.Figure):
-    fig.update_xaxes(tickformat="%d %b", hoverformat="%a %d %b %Y")
+def date_axis(fig: go.Figure, asleep: bool = False):
+    """Date x axis. `asleep=True` for charts keyed by fall-asleep time (hover shows it)."""
+    fig.update_xaxes(tickformat="%d %b", hoverformat="Asleep %a %d %b, %H:%M" if asleep else "%a %d %b %Y")
     xs = pd.to_datetime(pd.concat([pd.Series(t.x) for t in fig.data if t.x is not None]), errors="coerce").dropna()
     if not xs.empty and (xs.max() - xs.min()).days < 7:
         # few days of data: never tick below one day (plotly would otherwise show hours)
