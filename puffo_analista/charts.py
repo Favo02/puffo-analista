@@ -1,8 +1,9 @@
 """Plotly styling and chart builders.
 
 Colors come from a validated categorical palette (fixed slot order, separate
-light/dark steps). Activity types and sleep stages always map to the same slot,
-so filtering never repaints a series.
+light/dark steps). Activity kinds and sleep stages always map to the same slot,
+so filtering never repaints a series. The eight kinds use the eight slots in
+order; anything else folds into a gray "Other".
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from . import fmt
+from .activities import BY_KEY
 
 PALETTE = {
     "light": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
@@ -24,7 +26,6 @@ INK = {
                  axis="#383835", surface="#0e1117"),
 }
 
-ACTIVITY_SLOT = {"Run": 0, "Ride": 1, "Workout": 2, "Hike": 3}
 SLEEP_STAGES = [("deep", "Deep"), ("rem", "REM"), ("light", "Light"), ("awake", "Awake")]
 
 
@@ -37,11 +38,10 @@ class Theme:
     def slot(self, i: int) -> str:
         return self.pal[i % len(self.pal)]
 
-    def activity_color(self, t: str, known_order: list[str]) -> str:
-        if t in ACTIVITY_SLOT:
-            return self.slot(ACTIVITY_SLOT[t])
-        extra = [x for x in known_order if x not in ACTIVITY_SLOT]
-        return self.slot(4 + extra.index(t)) if t in extra else self.ink["muted"]
+    def kind_color(self, kind_key: str) -> str:
+        """Fixed color per activity kind; 'Other' is neutral gray (never a 9th hue)."""
+        slot = BY_KEY[kind_key].slot
+        return self.ink["muted"] if slot is None else self.slot(slot)
 
     @property
     def seq_scale(self):

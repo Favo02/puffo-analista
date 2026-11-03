@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from puffo_analista import fmt
+from puffo_analista.activities import BY_KEY, HIKE, KINDS, RIDE, RUN, Kind
 from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, line, pace_axis
 from puffo_analista.frames import Frames, build
 from puffo_analista.parse import Dataset, load_folder
@@ -113,11 +114,35 @@ if ds.issues:
 
 tab_over, tab_sleep, tab_vitals, tab_act = st.tabs(["Overview", "Sleep", "Vitals", "Activities"])
 
-ALL_TYPES = sorted(F.activities["type"].unique().tolist())
+def kinds_in(df: pd.DataFrame) -> list[Kind]:
+    """Activity kinds present in df, in fixed display order."""
+    present = set(df["kind"])
+    return [k for k in KINDS if k.key in present]
 
 
-def act_color(t: str) -> str:
-    return theme.activity_color(t, ALL_TYPES)
+def kind_bars(fig: go.Figure, df: pd.DataFrame, x: str, y: str, hover: str, scale=1.0, customdata=None):
+    """One stacked bar trace per activity kind, fixed order and color."""
+    for k in kinds_in(df):
+        d = df[df["kind"] == k.key]
+        fig.add_bar(x=d[x], y=d[y] * scale, name=k.label, marker_color=theme.kind_color(k.key),
+                    marker_line=theme.bar_gap_line(),
+                    customdata=None if customdata is None else d[y].map(customdata),
+                    hovertemplate=hover + "<extra>" + k.label + "</extra>")
+    return fig
+
+
+def kind_dots(fig: go.Figure, df: pd.DataFrame, y: str, hover: str):
+    """One scatter trace per activity kind (session-level values over time)."""
+    for k in kinds_in(df):
+        d = df[(df["kind"] == k.key) & df[y].notna()]
+        if d.empty:
+            continue
+        fig.add_scatter(
+            x=d["date"], y=d[y], name=k.label, mode="markers",
+            marker=dict(size=10, color=theme.kind_color(k.key), line=dict(width=2, color=theme.ink["surface"])),
+            customdata=d["name"], hovertemplate="%{customdata}<br>" + hover + "<extra>" + k.label + "</extra>",
+        )
+    return fig
 
 
 def mean(df: pd.DataFrame, col: str):
@@ -156,31 +181,24 @@ with tab_over:
         st.caption(f"Deltas compare with the previous {n_days} days.")
 
     if not P.activities.empty:
-        by_type = P.activities.groupby("type").agg(
-            n=("id", "count"), km=("distance_km", "sum"), secs=("duration_s", "sum"),
-            elev=("elevation_m", "sum"),
-        )
-        cols = st.columns(max(len(by_type), 1))
-        for col, (t, r) in zip(cols, by_type.iterrows()):
-            sub = f"{int(r.n)} session(s) · {fmt.duration(r.secs)}"
-            col.metric(t, fmt.num(r.km, 1, "km") if r.km else fmt.duration(r.secs), help=sub)
-            col.caption(sub)
+        # Endurance kinds headline their distance, sports their time.
+        kinds = kinds_in(P.activities)
+        for row in (kinds[i:i + 5] for i in range(0, len(kinds), 5)):
+            for col, k in zip(st.columns(5), row):
+                g = P.activities[P.activities["kind"] == k.key]
+                secs, km = g["duration_s"].sum(), g["distance_km"].sum()
+                sub = f"{len(g)} session(s) · {fmt.hours_minutes(secs / 60)}"
+                col.metric(k.label, fmt.num(km, 1, "km") if k.endurance and km else fmt.hours_minutes(secs / 60))
+                col.caption(sub)
 
     left, right = st.columns(2)
     with left:
         if P.activities.empty:
             empty("No activities in the selected period.")
         else:
-            wk = P.activities.groupby(["week", "type"], as_index=False)["duration_s"].sum()
-            fig = go.Figure()
-            for t in ALL_TYPES:
-                d = wk[wk["type"] == t]
-                if d.empty:
-                    continue
-                fig.add_bar(x=d["week"], y=d["duration_s"] / 60, name=t, marker_color=act_color(t),
-                            marker_line=theme.bar_gap_line(),
-                            customdata=[fmt.duration(s) for s in d["duration_s"]],
-                            hovertemplate="%{customdata}<extra>" + t + "</extra>")
+            wk = P.activities.groupby(["week", "kind"], as_index=False)["duration_s"].sum()
+            fig = kind_bars(go.Figure(), wk, "week", "duration_s", "%{customdata}", scale=1 / 60,
+                            customdata=fmt.duration)
             theme.layout(fig, "Weekly training time (min)").update_layout(barmode="stack")
             fig.update_xaxes(tickformat="W%V · %d %b", hoverformat="Week of %d %b %Y")
             plot(fig)
@@ -349,124 +367,164 @@ with tab_act:
     if A_all.empty:
         empty("No activities in the selected period.")
     else:
-        present = [t for t in ALL_TYPES if t in set(A_all["type"])]
-        types = st.multiselect("Activity types", present, default=present)
-        A = A_all[A_all["type"].isin(types)]
+        present = [k.label for k in kinds_in(A_all)]
+        chosen_kinds = st.multiselect("Activity types", present, default=present)
+        A = A_all[A_all["kind_label"].isin(chosen_kinds)]
 
         if A.empty:
             empty("No activities of the selected types.")
         else:
-            # Summary per type
+            # ---- Summary per kind: endurance in distance units, sports in time + HR
             rows = []
-            for t, g in A.groupby("type"):
+            for k in kinds_in(A):
+                g = A[A["kind"] == k.key]
                 secs, km, elev = g["duration_s"].sum(), g["distance_km"].sum(), g["elevation_m"].sum()
-                r = {"Type": t, "Sessions": len(g), "Time": fmt.duration(secs),
+                r = {"Type": k.label, "Sessions": len(g), "Time": fmt.duration(secs),
+                     "Avg duration": fmt.duration(g["duration_s"].mean()),
                      "Distance": fmt.num(km, 1, "km") if km else "–",
-                     "Elevation": fmt.num(elev, 0, "m") if elev else "–",
-                     "Avg HR": fmt.num(g["avg_hr"].mean(), 0, "bpm")}
-                if km:
-                    agg = {"type": t, "distance_km": km, "pace_s_km": secs / km, "speed_kmh": km / (secs / 3600),
-                           "elev_pace": (secs / 60) / (elev / 100) if elev else None}
-                    r["Pace / speed"] = fmt.activity_speed(agg)
-                else:
-                    r["Pace / speed"] = "–"
+                     "Elevation": fmt.num(elev, 0, "m") if k.endurance and elev else "–",
+                     "Pace / speed": "–",
+                     "Avg HR": fmt.num(g["avg_hr"].mean(), 0, "bpm"),
+                     "Max HR": fmt.num(g["max_hr"].max(), 0, "bpm"),
+                     "Avg effort": fmt.num(g["relative_effort"].mean())}
+                if k.endurance and km:
+                    r["Pace / speed"] = fmt.activity_speed({
+                        "kind": k.key, "distance_km": km, "pace_s_km": secs / km,
+                        "speed_kmh": km / (secs / 3600), "elev_pace": (secs / 60) / (elev / 100) if elev else None,
+                    })
                 rows.append(r)
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            st.caption("Run, ride and hike are measured over distance (pace in min/km, speed in km/h, climb in "
+                       "min/100m). Workout and court/team sports are measured over time and heart rate; their "
+                       "distance, when recorded, is only distance covered.")
 
             left, right = st.columns(2)
             with left:
-                wk = A[A["distance_km"] > 0].groupby(["week", "type"], as_index=False)["distance_km"].sum()
+                end = A[A["kind"].map(lambda k: BY_KEY[k].endurance) & (A["distance_km"] > 0)]
+                wk = end.groupby(["week", "kind"], as_index=False)["distance_km"].sum()
                 if wk.empty:
-                    empty("No distance-based activities.")
+                    empty("No run, ride or hike in the selection.")
                 else:
-                    fig = go.Figure()
-                    for t in ALL_TYPES:
-                        d = wk[wk["type"] == t]
-                        if not d.empty:
-                            fig.add_bar(x=d["week"], y=d["distance_km"], name=t, marker_color=act_color(t),
-                                        marker_line=theme.bar_gap_line(),
-                                        hovertemplate="%{y:.1f} km<extra>" + t + "</extra>")
+                    fig = kind_bars(go.Figure(), wk, "week", "distance_km", "%{y:.1f} km")
                     theme.layout(fig, "Weekly distance (km)").update_layout(barmode="stack")
                     fig.update_xaxes(tickformat="W%V · %d %b", hoverformat="Week of %d %b %Y")
                     plot(fig)
             with right:
-                fig = go.Figure()
-                for t in ALL_TYPES:
-                    d = A[A["type"] == t]
-                    if not d.empty:
-                        fig.add_scatter(
-                            x=d["date"], y=d["relative_effort"], name=t, mode="markers",
-                            marker=dict(size=10, color=act_color(t), line=dict(width=2, color=theme.ink["surface"])),
-                            customdata=d["name"], hovertemplate="%{customdata}<br>effort %{y:.0f}<extra>" + t + "</extra>",
-                        )
+                fig = kind_dots(go.Figure(), A, "relative_effort", "effort %{y:.0f}")
                 plot(date_axis(theme.layout(fig, "Relative effort per session", hover="closest")))
 
-            # Trends per type, in the type's own units
-            trend_cols = st.columns(3)
-            run = A[(A["type"] == "Run") & A["pace_s_km"].notna()]
-            ride = A[(A["type"] == "Ride") & A["speed_kmh"].notna()]
-            hike = A[(A["type"] == "Hike") & A["pace_s_km"].notna()]
-            with trend_cols[0]:
-                if not run.empty:
-                    fig = go.Figure(line(theme, run, "date", "pace_s_km", "Pace", act_color("Run"), "%{customdata}"))
-                    fig.data[0].customdata = run["pace_s_km"].map(fmt.pace)
-                    theme.layout(fig, "Run pace", height=260, legend=False)
-                    plot(date_axis(pace_axis(fig, run["pace_s_km"])))
-                    fig = go.Figure(line(theme, run, "date", "avg_hr", "Avg HR", act_color("Run"), "%{y:.0f} bpm"))
-                    plot(date_axis(theme.layout(fig, "Run average HR (bpm)", height=260, legend=False)))
-            with trend_cols[1]:
-                if not ride.empty:
-                    fig = go.Figure(line(theme, ride, "date", "speed_kmh", "Speed", act_color("Ride"), "%{y:.1f} km/h"))
-                    plot(date_axis(theme.layout(fig, "Ride speed (km/h)", height=260, legend=False)))
-                    fig = go.Figure(line(theme, ride, "date", "avg_hr", "Avg HR", act_color("Ride"), "%{y:.0f} bpm"))
-                    plot(date_axis(theme.layout(fig, "Ride average HR (bpm)", height=260, legend=False)))
-            with trend_cols[2]:
-                if not hike.empty:
-                    fig = go.Figure(line(theme, hike, "date", "pace_s_km", "Pace", act_color("Hike"), "%{customdata}"))
-                    fig.data[0].customdata = hike["pace_s_km"].map(fmt.pace)
-                    theme.layout(fig, "Hike pace", height=260, legend=False)
-                    plot(date_axis(pace_axis(fig, hike["pace_s_km"])))
-                    h2 = hike.dropna(subset=["elev_pace"])
-                    if not h2.empty:
-                        fig = go.Figure(line(theme, h2, "date", "elev_pace", "Climb", act_color("Hike"),
-                                             "%{y:.1f} min/100m"))
-                        plot(date_axis(theme.layout(fig, "Hike climb rate (min/100m elev)", height=260, legend=False)))
+            # ---- Endurance trends, each in its own units
+            run = A[(A["kind"] == RUN.key) & A["pace_s_km"].notna()]
+            ride = A[(A["kind"] == RIDE.key) & A["speed_kmh"].notna()]
+            hike = A[(A["kind"] == HIKE.key) & A["pace_s_km"].notna()]
+            if not (run.empty and ride.empty and hike.empty):
+                st.subheader("Run, ride & hike")
+                trend_cols = st.columns(3)
+                with trend_cols[0]:
+                    if not run.empty:
+                        fig = go.Figure(line(theme, run, "date", "pace_s_km", "Pace", theme.kind_color(RUN.key),
+                                             "%{customdata}"))
+                        fig.data[0].customdata = run["pace_s_km"].map(fmt.pace)
+                        theme.layout(fig, "Run pace", height=260, legend=False)
+                        plot(date_axis(pace_axis(fig, run["pace_s_km"])))
+                        fig = go.Figure(line(theme, run, "date", "avg_hr", "Avg HR", theme.kind_color(RUN.key),
+                                             "%{y:.0f} bpm"))
+                        plot(date_axis(theme.layout(fig, "Run average HR (bpm)", height=260, legend=False)))
+                with trend_cols[1]:
+                    if not ride.empty:
+                        fig = go.Figure(line(theme, ride, "date", "speed_kmh", "Speed", theme.kind_color(RIDE.key),
+                                             "%{y:.1f} km/h"))
+                        plot(date_axis(theme.layout(fig, "Ride speed (km/h)", height=260, legend=False)))
+                        fig = go.Figure(line(theme, ride, "date", "avg_hr", "Avg HR", theme.kind_color(RIDE.key),
+                                             "%{y:.0f} bpm"))
+                        plot(date_axis(theme.layout(fig, "Ride average HR (bpm)", height=260, legend=False)))
+                with trend_cols[2]:
+                    if not hike.empty:
+                        fig = go.Figure(line(theme, hike, "date", "pace_s_km", "Pace", theme.kind_color(HIKE.key),
+                                             "%{customdata}"))
+                        fig.data[0].customdata = hike["pace_s_km"].map(fmt.pace)
+                        theme.layout(fig, "Hike pace", height=260, legend=False)
+                        plot(date_axis(pace_axis(fig, hike["pace_s_km"])))
+                        h2 = hike.dropna(subset=["elev_pace"])
+                        if not h2.empty:
+                            fig = go.Figure(line(theme, h2, "date", "elev_pace", "Climb", theme.kind_color(HIKE.key),
+                                                 "%{y:.1f} min/100m"))
+                            plot(date_axis(theme.layout(fig, "Hike climb rate (min/100m elev)", height=260,
+                                                        legend=False)))
 
-            # Sessions table
+            # ---- Time-based sports (workout, soccer, padel, tennis, volleyball, other)
+            sports = A[~A["kind"].map(lambda k: BY_KEY[k].endurance)]
+            if not sports.empty:
+                st.subheader("Workout & sports")
+                left, right = st.columns(2)
+                with left:
+                    s = sports.assign(duration_min=sports["duration_s"] / 60)
+                    fig = kind_dots(go.Figure(), s, "duration_min", "%{y:.0f} min")
+                    plot(date_axis(theme.layout(fig, "Session duration (min)", height=280, hover="closest")))
+                with right:
+                    fig = kind_dots(go.Figure(), sports, "avg_hr", "avg %{y:.0f} bpm")
+                    plot(date_axis(theme.layout(fig, "Session average HR (bpm)", height=280, hover="closest")))
+                covered = sports[sports["distance_km"] > 0]
+                if not covered.empty:
+                    fig = kind_dots(go.Figure(), covered, "distance_km", "%{y:.1f} km covered")
+                    plot(date_axis(theme.layout(fig, "Distance covered (km)", height=240, hover="closest")))
+
+            # ---- Sessions table
             st.subheader("Sessions")
+            endurance = A["kind"].map(lambda k: BY_KEY[k].endurance)
+            has_cadence = A["kind"].map(lambda k: BY_KEY[k].cadence)
             table = pd.DataFrame({
                 "Date": A["date"].dt.date, "Type": A["type"], "Name": A["name"],
                 "Duration": A["duration_s"].map(fmt.duration),
                 "Distance": A["distance_km"].map(lambda x: fmt.num(x, 1, "km") if x else "–"),
                 "Pace / speed": [fmt.activity_speed(r) for _, r in A.iterrows()],
-                "Elevation": A["elevation_m"].map(lambda x: fmt.num(x, 0, "m")),
+                "Elevation": A["elevation_m"].where(endurance).map(lambda x: fmt.num(x, 0, "m")),
                 "Avg HR": A["avg_hr"].map(lambda x: fmt.num(x, 0)),
+                "Min HR": A["min_hr"].map(lambda x: fmt.num(x, 0)),
                 "Max HR": A["max_hr"].map(lambda x: fmt.num(x, 0)),
-                "Cadence": A["avg_cadence"].map(lambda x: fmt.num(x, 0)),
+                "Cadence": A["avg_cadence"].where(has_cadence).map(lambda x: fmt.num(x, 0)),
                 "Effort": A["relative_effort"].map(lambda x: fmt.num(x, 0)),
             }).iloc[::-1]
             st.dataframe(table, hide_index=True, width="stretch")
 
-            # Session detail
+            # ---- Session detail
             st.subheader("Session detail")
             labels = A["label"].iloc[::-1].tolist()
             chosen = st.selectbox("Session", labels)
             act = A[A["label"] == chosen].iloc[0]
-            color = act_color(act["type"])
-            c = st.columns(5)
-            c[0].metric("Duration", fmt.duration(act["duration_s"]))
-            c[1].metric("Distance", fmt.num(act["distance_km"], 2, "km") if act["distance_km"] else "–")
-            c[2].metric("Pace / speed", fmt.activity_speed(act))
-            c[3].metric("Avg / max HR", f"{fmt.num(act['avg_hr'])} / {fmt.num(act['max_hr'])}")
-            c[4].metric("Relative effort", fmt.num(act["relative_effort"]))
+            kind = BY_KEY[act["kind"]]
+            color = theme.kind_color(kind.key)
+            if kind.endurance:
+                metrics = [
+                    ("Duration", fmt.duration(act["duration_s"])),
+                    ("Distance", fmt.num(act["distance_km"], 2, "km") if act["distance_km"] else "–"),
+                    ("Speed" if kind.speed == "speed" else "Pace", fmt.activity_speed(act).split(" · ")[0]),
+                    ("Elevation", fmt.num(act["elevation_m"], 0, "m")),
+                ]
+                if kind.elev_pace:
+                    metrics.append(("Climb rate", fmt.elev_pace(act["elev_pace"])))
+                if kind.cadence:
+                    metrics.append(("Cadence", fmt.num(act["avg_cadence"])))
+                metrics += [("Avg / max HR", f"{fmt.num(act['avg_hr'])} / {fmt.num(act['max_hr'])}"),
+                            ("Relative effort", fmt.num(act["relative_effort"]))]
+            else:
+                metrics = [("Duration", fmt.duration(act["duration_s"]))]
+                if act["distance_km"] and pd.notna(act["distance_km"]):
+                    metrics.append(("Distance covered", fmt.num(act["distance_km"], 2, "km")))
+                metrics += [("Avg HR", fmt.num(act["avg_hr"], 0, "bpm")),
+                            ("Min / max HR", f"{fmt.num(act['min_hr'])} / {fmt.num(act['max_hr'])}"),
+                            ("Relative effort", fmt.num(act["relative_effort"]))]
+            for col, (label, value) in zip(st.columns(len(metrics)), metrics):
+                col.metric(label, value)
+            st.caption(f"{act['type']} · {kind.label}")
 
-            sp = P.splits[P.splits["activity_id"] == act["id"]]
+            sp = P.splits[P.splits["activity_id"] == act["id"]] if kind.endurance else P.splits.iloc[0:0]
             ch = P.hr_chunks[P.hr_chunks["activity_id"] == act["id"]]
             if not sp.empty:
                 left, right = st.columns(2)
                 xs = sp["n"].astype(str).where(sp["km"] >= 1, sp["n"].astype(str) + f" ({sp['km'].iloc[-1]:.2f})")
                 with left:
-                    if act["type"] == "Ride":
+                    if kind.speed == "speed":
                         fig = go.Figure(go.Bar(x=xs, y=sp["speed_kmh"], marker_color=color,
                                                hovertemplate="km %{x}<br>%{y:.1f} km/h<extra></extra>"))
                         theme.layout(fig, "Speed per km (km/h)", legend=False)

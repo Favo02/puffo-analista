@@ -57,19 +57,16 @@ def num(x, digits=0, unit="") -> str:
     return f"{s} {unit}".strip()
 
 
-def speed_label(activity_type: str) -> str:
-    """Which speed metric to show for an activity type."""
-    return "speed" if activity_type == "Ride" else "pace"
-
-
 def activity_speed(row) -> str:
-    """Speed/pace string according to the activity type."""
-    t = row["type"]
-    if not _ok(row.get("distance_km")) or not row.get("distance_km"):
+    """Pace/speed string in the units of the activity kind (– for non-endurance kinds)."""
+    from .activities import BY_KEY
+
+    kind = BY_KEY[row["kind"]]
+    if not kind.endurance or not _ok(row.get("distance_km")) or not row.get("distance_km"):
         return "–"
-    if t == "Ride":
+    if kind.speed == "speed":
         return speed(row["speed_kmh"])
     out = pace(row["pace_s_km"])
-    if t == "Hike" and _ok(row.get("elev_pace")):
+    if kind.elev_pace and _ok(row.get("elev_pace")):
         out += f" · {elev_pace(row['elev_pace'])}"
     return out

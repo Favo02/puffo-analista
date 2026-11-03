@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from .activities import BY_KEY
 from .parse import Dataset, night_after_day
 
 COLUMNS = {
@@ -14,7 +15,7 @@ COLUMNS = {
                    "avg_hrv", "min_hrv", "max_hrv"],
     "sleep": ["date", "start_min", "end_min", "score", "total_min", "deep", "light", "rem",
               "awake", "wakes", "resp_rate", "sleep_hrv", "sleep_rhr", "spo2_night"],
-    "activities": ["id", "date", "type", "name", "duration_s", "distance_km", "elevation_m",
+    "activities": ["id", "date", "type", "kind", "name", "duration_s", "distance_km", "elevation_m",
                    "avg_cadence", "relative_effort", "avg_hr", "min_hr", "max_hr"],
     "splits": ["activity_id", "n", "time_s", "avg_hr", "elev_diff"],
     "hr_chunks": ["activity_id", "n", "start_s", "end_s", "avg_hr", "min_hr", "max_hr"],
@@ -80,10 +81,14 @@ def build(ds: Dataset) -> Frames:
     ]
 
     acts = _df(ds, "activities").sort_values(["date", "id"])
-    dist = acts["distance_km"].where(acts["distance_km"] > 0)
+    acts["kind_label"] = acts["kind"].map(lambda k: BY_KEY[k].label)
+    # Pace/speed/climb rate only make sense for distance-based (endurance) kinds:
+    # a soccer match's "pace" would be meaningless.
+    endurance = acts["kind"].map(lambda k: BY_KEY[k].endurance).astype(bool)
+    dist = acts["distance_km"].where((acts["distance_km"] > 0) & endurance)
     acts["pace_s_km"] = acts["duration_s"] / dist
     acts["speed_kmh"] = dist / (acts["duration_s"] / 3600)
-    elev = acts["elevation_m"].where(acts["elevation_m"] > 0)
+    elev = acts["elevation_m"].where((acts["elevation_m"] > 0) & endurance)
     acts["elev_pace"] = (acts["duration_s"] / 60) / (elev / 100)
     acts["week"] = acts["date"] - pd.to_timedelta(acts["date"].dt.day_of_week, unit="D")
     acts["label"] = (

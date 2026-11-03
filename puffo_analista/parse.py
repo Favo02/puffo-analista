@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .activities import OTHER, classify
+
 # --------------------------------------------------------------------------- #
 # Schema: what we know how to read. Anything else triggers a warning.
 # --------------------------------------------------------------------------- #
@@ -78,7 +80,6 @@ SCHEMA: dict[str, dict] = {
     ),
 }
 
-KNOWN_ACTIVITY_TYPES = {"Run", "Ride", "Hike", "Workout"}
 
 HEADER_RE = re.compile(
     r"^#\s*Personal Context:\s*(\d{4}-\d{2}-\d{2})\s*(?:→|->)\s*(\d{4}-\d{2}-\d{2})\s*$"
@@ -261,18 +262,21 @@ def _extract_activities(root: ET.Element, fd: FileData, c: _Conv):
             continue
         name = a.get("name") or "(unnamed)"
         w = f"activity {d} {name!r}"
-        atype = a.get("type") or "Other"
-        if atype not in KNOWN_ACTIVITY_TYPES:
+        atype = a.get("type") or ""
+        kind = classify(atype)
+        if kind is OTHER:
             c.issues.append(
                 Issue("warning", c.file,
-                      f"{w}: unknown activity type {atype!r}, shown with generic min/km units")
+                      f"{w}: unknown activity type {atype!r}, shown as 'Other' "
+                      "(duration, heart rate, effort and distance only)")
             )
         aid = f"{fd.path.name}#{i}"
         fd.activities.append(
             dict(
                 id=aid,
                 date=d,
-                type=atype,
+                type=atype or "(none)",
+                kind=kind.key,
                 name=name,
                 duration_s=c.duration(a, "duration", w),
                 distance_km=c.num(a, "distance_km", w),
