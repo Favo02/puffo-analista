@@ -11,7 +11,7 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 
-from . import fmt, quality
+from . import fmt, quality, trend
 from .activities import BY_KEY
 
 PALETTE = {
@@ -133,30 +133,51 @@ def quality_color(s: float, fallback: str) -> str:
 
 def series(theme: Theme, df: pd.DataFrame, x: str, y: str, *, name: str, value_fmt,
            rule_key: str | None = None, baseline: pd.Series | None = None,
-           color: str | None = None, bars: bool = False, scale: float = 1.0) -> list:
-    """A time series whose points (or bars) are colored by how good each value is.
+           color: str | None = None, bars: bool = False, scale: float = 1.0,
+           show_trend: bool = True) -> list:
+    """A time series whose points (or bars) are colored by how good each value is,
+    with a smoothed trend behind the points (on top of bars).
 
     `rule_key` picks a rule from `quality.RULES`; `baseline` is the history used by
     personal-baseline rules (pass all-time data so colors don't change with the
     selected period). Without a rule, every mark uses `color`.
     """
-    d = df.dropna(subset=[y])
+    d = df.dropna(subset=[y]).sort_values(x)
     base_color = color or theme.slot(0)
     rule = quality.RULES.get(rule_key) if rule_key else None
     scores = quality.score(rule, d[y], baseline)
-    colors = [quality_color(s, base_color) for s in scores]
     note = quality.describe(rule_key) if rule_key else ""
-    rating = [f"<br>{quality.label(s)} · {note}" if s == s else "" for s in scores]
-    custom = list(zip([value_fmt(v) for v in d[y]], rating))
+    marks = pd.DataFrame({
+        "x": d[x].to_numpy(),
+        "y": (d[y] * scale).to_numpy(),
+        "color": [quality_color(s, base_color) for s in scores],
+        "value": [value_fmt(v) for v in d[y]],
+        "rating": [f"<br>{quality.label(s)} · {note}" if s == s else "" for s in scores],
+    })
     hover = "%{customdata[0]}%{customdata[1]}<extra>" + name + "</extra>"
-    ys = d[y] * scale
+    span = (marks["x"].max() - marks["x"].min()) / trend.DAY if len(marks) > 1 else 0
+
+    trend_traces = []
+    if show_trend:
+        gx, gy = trend.smooth(d[x], d[y])
+        if len(gx):
+            trend_traces.append(go.Scatter(
+                x=gx, y=gy * scale, name="trend", mode="lines", line=dict(color=theme.ink["secondary"], width=3,
+                                                                          shape="spline", smoothing=0.6),
+                opacity=0.6, customdata=[value_fmt(v) if v == v else "" for v in gy],
+                hovertemplate="trend %{customdata}<extra></extra>",
+            ))
 
     if bars:
-        return [go.Bar(x=d[x], y=ys, name=name, marker_color=colors, customdata=custom, hovertemplate=hover)]
-    return [go.Scatter(
-        x=d[x], y=ys, name=name, mode="lines+markers",
+        return [go.Bar(x=marks["x"], y=marks["y"], name=name, marker_color=marks["color"],
+                       customdata=marks[["value", "rating"]].to_numpy(), hovertemplate=hover), *trend_traces]
+
+    # don't draw the connecting line across long gaps (e.g. a month without data)
+    marks = trend.break_gaps(marks, "x", span).fillna({"color": base_color, "value": "", "rating": ""})
+    return [*trend_traces, go.Scatter(
+        x=marks["x"], y=marks["y"], name=name, mode="lines+markers",
         # with a rule the connecting line stays neutral and the markers carry the rating
-        line=dict(color=theme.ink["axis"] if rule else base_color, width=1.5 if rule else 2),
-        marker=dict(size=8, color=colors, line=dict(width=1.5, color=theme.ink["surface"])),
-        customdata=custom, hovertemplate=hover,
+        line=dict(color=theme.ink["axis"] if rule else base_color, width=1 if rule else 1.5),
+        marker=dict(size=7, color=marks["color"], line=dict(width=1.5, color=theme.ink["surface"])),
+        customdata=marks[["value", "rating"]].to_numpy(), hovertemplate=hover,
     )]

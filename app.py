@@ -15,7 +15,7 @@ import streamlit as st
 
 from puffo_analista import fmt
 from puffo_analista.activities import BY_KEY, HIKE, KINDS, RIDE, RUN, Kind
-from puffo_analista import quality
+from puffo_analista import quality, trend
 from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, pace_axis, quality_color, series
 from puffo_analista.frames import Frames, build
 from puffo_analista.parse import Dataset, load_folder
@@ -323,6 +323,11 @@ with tab_sleep:
                            customdata=[[fmt.clock(m), quality.label(s)] for m, s in zip(S["end_min"], wake_s)],
                            hovertemplate="awake %{customdata[0]} · %{customdata[1]}<extra></extra>"),
             ])
+            for ys in (S["bed_min"], wake_pos):  # bedtime and wake-up trends
+                gx, gy = trend.smooth(S["asleep_at"], ys)
+                if len(gx):
+                    fig.add_scatter(x=gx, y=gy, mode="lines", hoverinfo="skip", opacity=0.6,
+                                    line=dict(color=theme.ink["secondary"], width=3, shape="spline", smoothing=0.6))
             theme.layout(fig, "Sleep window (● asleep vs 23:00, ◆ awake vs 08:00)", legend=False, hover="closest")
             clock_axis(fig, pd.concat([S["bed_min"], wake_pos]), step=120)
             fig.update_yaxes(autorange="reversed")
