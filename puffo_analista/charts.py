@@ -63,7 +63,8 @@ class Theme:
             hovermode=hover,
             hoverlabel=dict(bgcolor=ink["surface"], font=dict(color=ink["primary"]), bordercolor=ink["axis"]),
             showlegend=legend,
-            legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1, traceorder="normal",
+            # Below the plot, left-aligned: wraps freely without ever hitting the title.
+            legend=dict(orientation="h", yanchor="top", y=-0.14, xanchor="left", x=0, traceorder="normal",
                         font=dict(color=ink["secondary"])),
             barcornerradius=4,
             bargap=0.3,
