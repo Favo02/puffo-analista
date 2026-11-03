@@ -1,0 +1,7 @@
+[client]
+# Hide the "Deploy" button and developer menu entries: this is a local, personal dashboard.
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[browser]
+gatherUsageStats = false
