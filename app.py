@@ -15,7 +15,7 @@ import streamlit as st
 
 from puffo_analista import fmt
 from puffo_analista.activities import BY_KEY, HIKE, KINDS, RIDE, RUN, Kind
-from puffo_analista import quality, trend
+from puffo_analista import food, quality, trend
 from puffo_analista.charts import SLEEP_STAGES, Theme, clock_axis, date_axis, pace_axis, quality_color, series
 from puffo_analista.frames import Frames, build
 from puffo_analista.parse import Dataset, load_folder
@@ -42,6 +42,16 @@ def _folder_signature(folder: Path) -> tuple:
 def load(folder: str, sig: tuple) -> tuple[Dataset, Frames]:
     ds = load_folder(Path(folder))
     return ds, build(ds)
+
+
+def _food_signature(folder: Path) -> tuple:
+    return tuple(sorted((p.name, p.stat().st_mtime_ns) for p in folder.glob("*.json"))) if folder.is_dir() else ()
+
+
+@st.cache_data(show_spinner=False)
+def load_food(folder: str, sig: tuple):
+    days, summaries, problems = food.load_store(Path(folder))
+    return (days, summaries, problems, *food.tables(days))
 
 
 _chart_ids = iter(range(1_000_000))
@@ -90,7 +100,8 @@ with c_colors.popover("🎨 How colors work", width="stretch"):
         "**Your own baseline** (all-time median ± 2 robust SD)\n"
         "- Resting HR (day & night): lower is better\n- HRV, VO₂max: higher is better\n"
         "- Respiratory rate: closer to your usual is better\n"
-        "- Run / hike pace, hike climb rate: faster is better · Ride speed: higher is better"
+        "- Run / hike pace, hike climb rate: faster is better · Ride speed: higher is better\n\n"
+        "**Food** (scores given by the LLM analysis, 0–100): 30 → 85"
     )
 period = c_period.selectbox("Period", ["All time", *months, "Custom range"])
 if period == "All time":
@@ -116,6 +127,20 @@ prev_sparse = prev is not None and prev_days < n_days / 2
 if prev_sparse:
     prev = None
 
+# Food analysis (saved LLM answers), by sleep-based food day.
+food_dir = folder / "food"
+stored_days, food_summaries, food_problems, FD, FM = load_food(str(food_dir), _food_signature(food_dir))
+
+
+def food_between(df: pd.DataFrame, a, b) -> pd.DataFrame:
+    return df[(df["day"] >= pd.Timestamp(a)) & (df["day"] <= pd.Timestamp(b))]
+
+
+PD, PM = food_between(FD, start, end), food_between(FM, start, end)
+_st = food.day_status(F.meals, stored_days)  # ok / changed / missing per food day with meals
+food_status = pd.DataFrame({"day": pd.to_datetime(_st.index), "status": _st.to_numpy()})
+prev_FD = food_between(FD, start - timedelta(days=n_days), start - timedelta(days=1)) if prev is not None else None
+
 # --------------------------------------------------------------------------- #
 # Issues
 # --------------------------------------------------------------------------- #
@@ -134,7 +159,7 @@ if ds.issues:
         for i in errors + warnings:
             st.markdown(f"{'⛔' if i.level == 'error' else '⚠️'} `{i.file}` — {i.message}")
 
-tab_over, tab_sleep, tab_vitals, tab_act = st.tabs(["Overview", "Sleep", "Vitals", "Activities"])
+tab_over, tab_sleep, tab_vitals, tab_act, tab_food = st.tabs(["Overview", "Sleep", "Vitals", "Activities", "Food"])
 
 def kinds_in(df: pd.DataFrame) -> list[Kind]:
     """Activity kinds present in df, in fixed display order."""
@@ -202,6 +227,29 @@ def ts(df: pd.DataFrame, x: str, y: str, title: str, value_fmt, history: pd.Data
     return date_axis(fig, asleep=asleep)
 
 
+MACRO_KCAL = [("protein_g", "Protein", 4, 0), ("carbs_g", "Carbs", 4, 3), ("fat_g", "Fat", 9, 1),
+              ("alcohol_g", "Alcohol", 7, 7)]  # column, label, kcal per gram, palette slot
+
+
+def food_score_chart(D: pd.DataFrame) -> go.Figure:
+    return ts(D, "day", "score", "Daily food score", INT, rule="food_score")
+
+
+def kcal_chart(D: pd.DataFrame) -> go.Figure:
+    """Calories per day, stacked by where they come from, with the smoothed total."""
+    fig = go.Figure()
+    for col, label, k, slot in MACRO_KCAL:
+        fig.add_bar(x=D["day"], y=D[col] * k, name=label, marker_color=theme.slot(slot),
+                    marker_line=theme.bar_gap_line(), customdata=D[col],
+                    hovertemplate="%{y:.0f} kcal (%{customdata:.0f} g)<extra>" + label + "</extra>")
+    gx, gy = trend.smooth(D["day"], D["kcal"])
+    if len(gx):
+        fig.add_scatter(x=gx, y=gy, name="trend", mode="lines", opacity=0.6, hoverinfo="skip",
+                        line=dict(color=theme.ink["secondary"], width=3, shape="spline", smoothing=0.6))
+    theme.layout(fig, "Calories per day by source (kcal)").update_layout(barmode="stack")
+    return date_axis(fig)
+
+
 def mean(df: pd.DataFrame, col: str):
     return df[col].mean() if not df.empty and df[col].notna().any() else None
 
@@ -217,7 +265,7 @@ def delta(cur, before, digits=0):
 # --------------------------------------------------------------------------- #
 
 with tab_over:
-    c = st.columns(6)
+    c = st.columns(8)
     v_score, v_sleep = mean(P.sleep, "score"), mean(P.sleep, "total_min")
     v_rhr, v_steps = mean(P.vitals, "resting_hr"), mean(P.vitals, "steps")
     pb = prev or P  # placeholder when no previous period
@@ -234,6 +282,11 @@ with tab_over:
                 delta(len(P.activities), len(pb.activities)) if prev is not None else None)
     c[5].metric("Training time", fmt.hours_minutes(P.activities["duration_s"].sum() / 60),
                 help="Total moving time of all activities")
+    v_food = mean(PD, "score")
+    c[6].metric("Food score", fmt.num(v_food),
+                delta(v_food, mean(prev_FD, "score") if prev_FD is not None else None, 1),
+                help="Average day score of the analysed days (Food tab)")
+    c[7].metric("Calories", fmt.num(mean(PD, "kcal"), 0, "kcal"), help="Average per analysed day (Food tab)")
     if prev is not None:
         st.caption(f"Deltas compare with the previous {n_days} days.")
     elif prev_sparse:
@@ -279,9 +332,15 @@ with tab_over:
         else:
             plot(ts(P.vitals, "date", "resting_hr", "Resting heart rate (bpm)", BPM, F.vitals))
 
-    if not (P.meals.empty and P.medicines.empty):
-        st.caption(f"🍝 {len(P.meals)} meals and 💊 {len(P.medicines)} medicine entries recorded in this period "
-                   "— food analysis is coming later.")
+    if not PD.empty:
+        left, right = st.columns(2)
+        with left:
+            plot(food_score_chart(PD))
+        with right:
+            plot(kcal_chart(PD))
+    todo_days = int((food_between(food_status, start, end)["status"] != "ok").sum())
+    if todo_days > 0:
+        st.caption(f"🍝 {todo_days} day(s) with meals in this period are not analysed yet: see the Food tab.")
 
 # --------------------------------------------------------------------------- #
 # Sleep
@@ -629,3 +688,187 @@ with tab_act:
                 plot(fig)
             if sp.empty and ch.empty:
                 st.caption("No splits or HR chunks for this session.")
+
+# --------------------------------------------------------------------------- #
+# Food
+# --------------------------------------------------------------------------- #
+
+with tab_food:
+    for msg in food_problems:
+        st.warning(msg, icon="⚠️")
+    st.caption("A food day runs from wake-up to the next wake-up: a snack at 00:45 before going to bed counts "
+               "for the day before. Scores and nutrients are estimates made by an external LLM from your notes.")
+
+    if PD.empty:
+        empty("No analysed days in this period. Copy the prompt below into an LLM and paste its answer back.")
+    else:
+        c = st.columns(8)
+        c[0].metric("Day score", fmt.num(mean(PD, "score")),
+                    delta(mean(PD, "score"), mean(prev_FD, "score") if prev_FD is not None else None, 1),
+                    help="Average day score (0–100)")
+        c[1].metric("Meal score", fmt.num(mean(PM, "score")), help="Average meal score (0–100)")
+        for col, (label, key, unit) in zip(c[2:], [("Calories", "kcal", "kcal"), ("Protein", "protein_g", "g"),
+                                                   ("Carbs", "carbs_g", "g"), ("Fat", "fat_g", "g"),
+                                                   ("Fiber", "fiber_g", "g"), ("Alcohol", "alcohol_g", "g")]):
+            col.metric(label, fmt.num(mean(PD, key), 0, unit), help="Average per analysed day")
+        st.caption(f"{len(PD)} analysed day(s) in this period.")
+
+        for mo in sorted({d.strftime("%Y-%m") for d in PD["day"]}):
+            if mo in food_summaries:
+                st.info(f"**{pd.Period(mo, 'M').strftime('%B %Y')}:** {food_summaries[mo]}", icon="🧾")
+
+        left, right = st.columns(2)
+        with left:
+            plot(food_score_chart(PD))
+        with right:
+            plot(kcal_chart(PD))
+
+        left, right = st.columns(2)
+        with left:
+            # When you eat, per food day: after-midnight meals sit below 24:00. Size = kcal, color = score.
+            M = PM.dropna(subset=["at"])
+            mins = (M["at"] - M["day"]).dt.total_seconds() / 60
+            scores = quality.score(quality.RULES["food_score"], M["score"])
+            fig = go.Figure(go.Scatter(
+                x=M["day"], y=mins, mode="markers",
+                marker=dict(size=(6 + M["kcal"].fillna(0).clip(0, 2000) ** 0.5 * 0.6).to_list(),
+                            color=[quality_color(s, theme.ink["muted"]) for s in scores],
+                            line=dict(width=1, color=theme.ink["surface"])),
+                customdata=list(zip(M["at"].dt.strftime("%a %d %b %H:%M"), M["type"].map(food.MEAL_TYPES)
+                                    .fillna(M["type"]), M["text"], M["kcal"].map(fmt.num),
+                                    M["score"].map(fmt.num))),
+                hovertemplate="%{customdata[0]} · %{customdata[1]}<br>%{customdata[2]}<br>"
+                              "%{customdata[3]} kcal · score %{customdata[4]}<extra></extra>",
+            ))
+            theme.layout(fig, "Meal times (size: kcal, color: score)", legend=False, hover="closest")
+            clock_axis(fig, mins, step=180)
+            fig.update_yaxes(autorange="reversed")
+            plot(date_axis(fig))
+        with right:
+            by_type = (PM.assign(label=PM["type"].map(food.MEAL_TYPES).fillna(PM["type"]))
+                       .groupby("label", sort=False)
+                       .agg(score=("score", "mean"), kcal=("kcal", "mean"), n=("score", "size")))
+            by_type = by_type.reindex([t for t in [*food.MEAL_TYPES.values(), *by_type.index]
+                                       if t in by_type.index]).loc[lambda d: ~d.index.duplicated()]
+            scores = quality.score(quality.RULES["food_score"], by_type["score"])
+            fig = go.Figure(go.Bar(
+                x=by_type.index, y=by_type["score"], marker_color=[quality_color(s, theme.slot(0)) for s in scores],
+                text=by_type["n"].map(lambda n: f"{n} meals"), textposition="inside",
+                customdata=by_type["kcal"].map(fmt.num),
+                hovertemplate="%{x}: score %{y:.0f}<br>avg %{customdata} kcal<extra></extra>",
+            ))
+            theme.layout(fig, "Average score by meal", legend=False, hover="closest")
+            fig.update_yaxes(range=[0, 100])
+            plot(fig)
+
+        st.markdown("**Days**")
+        days_tbl = PD.sort_values("day", ascending=False)
+        st.dataframe(
+            days_tbl[["day", "score", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "alcohol_g", "note"]],
+            hide_index=True, width="stretch",
+            column_config={
+                "day": st.column_config.DateColumn("Day", format="ddd DD MMM"),
+                "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+                "kcal": st.column_config.NumberColumn("kcal", format="%d"),
+                **{k: st.column_config.NumberColumn(k.split("_")[0].capitalize() + " (g)", format="%.0f")
+                   for k in ("protein_g", "carbs_g", "fat_g", "fiber_g", "alcohol_g")},
+                "note": st.column_config.TextColumn("Note", width="large"),
+            },
+        )
+        with st.expander(f"Meals ({len(PM)})"):
+            meals_tbl = PM.sort_values("at", ascending=False).assign(
+                type=PM["type"].map(food.MEAL_TYPES).fillna(PM["type"]))
+            st.dataframe(
+                meals_tbl[["day", "at", "type", "text", "score", "kcal", "protein_g", "carbs_g", "fat_g",
+                           "confidence", "note"]],
+                hide_index=True, width="stretch",
+                column_config={
+                    "day": st.column_config.DateColumn("Day", format="DD MMM"),
+                    "at": st.column_config.DatetimeColumn("Time", format="HH:mm"),
+                    "type": "Meal", "text": st.column_config.TextColumn("What", width="medium"),
+                    "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+                    "kcal": st.column_config.NumberColumn("kcal", format="%d"),
+                    **{k: st.column_config.NumberColumn(k.split("_")[0].capitalize() + " (g)", format="%.0f")
+                       for k in ("protein_g", "carbs_g", "fat_g")},
+                    "confidence": "Confidence", "note": st.column_config.TextColumn("Note", width="large"),
+                },
+            )
+
+    # ----------------------------------------------------------------------- #
+    # Prompt → LLM → answer
+    # ----------------------------------------------------------------------- #
+
+    st.divider()
+    st.subheader("Analyse with an LLM")
+    food_months = sorted({d.strftime("%Y-%m") for d in F.meals["day"]}, reverse=True)
+    if not food_months:
+        empty("No meals in the exports.")
+        st.stop()
+
+    m_month, m_scope, m_info = st.columns([1, 1.4, 2], vertical_alignment="bottom")
+    month = m_month.selectbox("Month", food_months, index=food_months.index(period) if period in food_months else 0,
+                              format_func=lambda m: pd.Period(m, "M").strftime("%B %Y"))
+    ms = food_status[food_status["day"].dt.strftime("%Y-%m") == month]
+    todo = ms[ms["status"] != "ok"]
+    n_changed = int((ms["status"] == "changed").sum())
+    scope = m_scope.radio("Days", ["todo", "all"], horizontal=True,
+                          format_func=lambda s: f"Not analysed yet ({len(todo)})" if s == "todo" else "Whole month")
+    m_info.caption(f"{len(ms)} day(s) with meals · {int((ms['status'] == 'ok').sum())} analysed · "
+                   f"{int((ms['status'] == 'missing').sum())} not analysed"
+                   + (f" · {n_changed} changed since their analysis" if n_changed else ""))
+
+    with st.expander("About you (sent with the prompt)", expanded=not (food_dir / food.PROFILE_FILE).exists()):
+        st.caption(f"Saved in `{food_dir / food.PROFILE_FILE}`. Better details mean better estimates.")
+        with st.form("food_profile", border=False):
+            profile_text = st.text_area("About you", value=food.load_profile(food_dir), height=320,
+                                        label_visibility="collapsed")
+            if st.form_submit_button("Save"):
+                food.save_profile(food_dir, profile_text)
+                st.toast("Profile saved")
+
+    days_sel = set((todo if scope == "todo" else ms)["day"])
+    meals_sel = F.meals[F.meals["day"].isin(days_sel)]
+    if meals_sel.empty:
+        st.success("Every day of this month is analysed. Choose “Whole month” to analyse it again.", icon="✅")
+    else:
+        covered = {d for f in ds.files for d in pd.date_range(f.range_start, f.range_end)}
+        incomplete = {f"{d:%Y-%m-%d}" for d in days_sel if d + timedelta(days=1) not in covered}
+        prompt = food.build_prompt(meals_sel, F.sleep, F.vitals, F.activities, food.load_profile(food_dir),
+                                   pd.Period(month, "M").strftime("%B %Y"), incomplete)
+        st.markdown(f"**1. Copy the prompt** ({len(days_sel)} day(s), {len(meals_sel)} meals, "
+                    f"about {max(1, round(len(prompt) / 3_500))}k tokens) with the button at the top right of the box, "
+                    "and paste it into a capable LLM.")
+        if incomplete:
+            st.caption("⏳ " + ", ".join(sorted(incomplete)) + ": the next day's export isn't loaded yet, so "
+                       "after-midnight snacks may be missing. These days will show as changed once it is.")
+        st.code(prompt, language="markdown", wrap_lines=True, height=420)
+
+    st.markdown("**2. Paste the answer** here. Complete days are saved even if the answer was cut off; "
+                "already analysed days are replaced.")
+    with st.form("food_answer", clear_on_submit=True, border=False):
+        answer_text = st.text_area("LLM answer", height=200, label_visibility="collapsed",
+                                   placeholder='```json\n{"days": [ … ], "month_summary": "…"}\n```')
+        submitted = st.form_submit_button("Check and save", type="primary")
+    if submitted and answer_text.strip():
+        result = food.parse_answer(answer_text, F.meals)
+        if result.days:
+            food.save(food_dir, result, month=month)
+        st.session_state["food_result"] = result
+        st.rerun()
+
+    result = st.session_state.pop("food_result", None)
+    if result is not None:
+        if result.error:
+            st.error(result.error, icon="⛔")
+        if result.days:
+            files = sorted({f"{d[:7]}.json" for d in result.days})
+            st.success(f"Saved {len(result.days)} day(s) to {', '.join(files)}.", icon="✅")
+        if result.rejected:
+            st.error("**Not saved:**\n" + "\n".join(f"- {d}: {why}" for d, why in sorted(result.rejected.items())),
+                     icon="⛔")
+        if result.warnings:
+            with st.expander(f"⚠️ {len(result.warnings)} warning(s)", expanded=result.truncated):
+                st.markdown("\n".join(f"- {w}" for w in result.warnings))
+
+    if not P.medicines.empty:
+        st.caption(f"💊 {len(P.medicines)} medicine entries in this period are not part of the analysis.")

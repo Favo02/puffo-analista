@@ -79,6 +79,8 @@ RULES: dict[str, Rule] = {
     "hike_pace": BASE_LOWER,
     "hike_climb": BASE_LOWER,
     "ride_speed": BASE_HIGHER,
+    # food (scores come from the LLM analysis)
+    "food_score": higher(30, 85, "30 → 85"),
 }
 
 
