@@ -1,4 +1,4 @@
-# puffo-analista
+# Puffo Analista
 
 Local dashboard for the monthly context exports of [puffo-coach](https://github.com/Favo02/puffo-coach).
 
@@ -17,13 +17,14 @@ New or changed files are picked up automatically on the next page interaction.
 
 ## Structure
 
-| File | Role |
-|---|---|
-| `puffo_analista/parse.py` | Reads exports into records, validates them against a known schema, detects duplicates |
-| `puffo_analista/frames.py` | Builds pandas DataFrames + derived columns (pace, speed, bedtime, partial splits…) |
-| `puffo_analista/fmt.py` | Units & formatting: km, 24h clock, min/km (run, hike), km/h (ride), min/100m elev (hike) |
-| `puffo_analista/charts.py` | Plotly theme (light/dark palette) and axis helpers |
-| `app.py` | Streamlit dashboard: Overview, Sleep, Vitals, Activities |
+| File                       | Role                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `puffo_analista/parse.py`  | Reads exports into records, validates them against a known schema, detects duplicates    |
+| `puffo_analista/frames.py` | Builds pandas DataFrames + derived columns (pace, speed, bedtime, partial splits…)       |
+| `puffo_analista/fmt.py`    | Units & formatting: km, 24h clock, min/km (run, hike), km/h (ride), min/100m elev (hike) |
+| `puffo_analista/charts.py` | Plotly theme (light/dark palette) and axis helpers                                       |
+| `puffo_analista/food.py`   | Food days, the LLM prompt, validation and storage of its answer                          |
+| `app.py`                   | Streamlit dashboard: Overview, Sleep, Vitals, Activities, Food                           |
 
 ## Data rules
 
@@ -38,17 +39,34 @@ New or changed files are picked up automatically on the next page interaction.
 - **Activities** are grouped by kind (Strava `sport_type` matched like puffo-coach does, so `TrailRun` is a run and
   `WeightTraining` a workout). Each kind shows only what makes sense for it:
 
-  | Kind | Shown |
-  |---|---|
-  | Run | distance, pace (min/km), elevation, cadence, per-km pace & HR, HR |
-  | Ride | distance, speed (km/h), elevation, cadence, per-km speed & HR, HR |
-  | Hike | distance, pace (min/km), elevation, climb rate (min/100m), per-km pace & HR, HR |
-  | Workout, Volleyball | duration, avg/min/max HR, relative effort, HR over the session |
-  | Soccer, Padel, Tennis | as above, plus distance covered when the watch recorded it (never a pace) |
-  | anything else | shown as gray "Other" (duration, HR, effort, distance) with a ⚠️ warning |
+  | Kind                  | Shown                                                                           |
+  | --------------------- | ------------------------------------------------------------------------------- |
+  | Run                   | distance, pace (min/km), elevation, cadence, per-km pace & HR, HR               |
+  | Ride                  | distance, speed (km/h), elevation, cadence, per-km speed & HR, HR               |
+  | Hike                  | distance, pace (min/km), elevation, climb rate (min/100m), per-km pace & HR, HR |
+  | Workout, Volleyball   | duration, avg/min/max HR, relative effort, HR over the session                  |
+  | Soccer, Padel, Tennis | as above, plus distance covered when the watch recorded it (never a pace)       |
+  | anything else         | shown as gray "Other" (duration, HR, effort, distance) with a ⚠️ warning        |
+
 - **Durations** are `MM:SS` or `HH:MM:SS`. The last km split is treated as a partial km (remaining distance).
-- **Meals** and **medicines** (`<medicine time="HH:MM">…</medicine>` inside a meals `<day>`) are parsed but not
-  analysed yet.
+- **Food days** run from one wake-up to the next, so a snack at 00:45 before going to bed belongs to the day before.
+  The wake-up is the end of the night before (the sleep entry asleep at 23:30 on D-1 or 00:30 on D; naps under 3 h
+  never end a day); without sleep data, 05:00 is the cutoff.
+- **Medicines** (`<medicine time="HH:MM">…</medicine>` inside a meals `<day>`) are parsed but not analysed.
+
+## Food analysis
+
+Nutrition is estimated by an external LLM, in the **Food** tab:
+
+1. Fill in **About you** once (age, weight, goal, portion habits): saved in `data/food/profile.md`.
+2. Pick a month and copy the prompt: by default it holds only the days not analysed yet. Each day lists its meals
+   plus wake-up, bedtime, steps and workouts.
+3. Paste the LLM's JSON answer back and press **Check and save**. Every meal gets kcal, macros, a 0–100 score and a
+   note; every day a 0–100 score.
+
+The answer is checked day by day: a day with missing or unknown meals or bad values is not saved (the rest is), and
+an answer cut off halfway still saves every complete day. Days are stored in `data/food/YYYY-MM.json` together with
+the meal text, so a meal edited in a later export shows its day as _changed_ and back in the next prompt.
 
 ## Colors
 
