@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .activities import BY_KEY
+from .food import assign_days
 from .parse import Dataset, night_after_day
 
 COLUMNS = {
@@ -37,8 +38,8 @@ class Frames:
 
     def filter(self, start, end) -> "Frames":
         """Restrict every table to dates in [start, end] (inclusive)."""
-        def by_date(df):
-            return df[(df["date"] >= pd.Timestamp(start)) & (df["date"] <= pd.Timestamp(end))]
+        def by_date(df, col="date"):
+            return df[(df[col] >= pd.Timestamp(start)) & (df[col] <= pd.Timestamp(end))]
 
         acts = by_date(self.activities)
         ids = set(acts["id"])
@@ -49,13 +50,14 @@ class Frames:
             activities=acts,
             splits=self.splits[self.splits["activity_id"].isin(ids)],
             hr_chunks=self.hr_chunks[self.hr_chunks["activity_id"].isin(ids)],
-            meals=by_date(self.meals),
+            meals=by_date(self.meals, "day"),
             medicines=by_date(self.medicines),
         )
 
     def all_dates(self) -> pd.Series:
         return pd.concat(
-            [df["date"] for df in (self.vitals, self.sleep, self.activities, self.meals, self.medicines)]
+            [*(df["date"] for df in (self.vitals, self.sleep, self.activities, self.meals, self.medicines)),
+             self.meals["day"]]  # a food day can start the day before its first meal's date
         ).dropna()
 
 
@@ -112,4 +114,6 @@ def build(ds: Dataset) -> Frames:
     chunks = _df(ds, "hr_chunks").sort_values(["activity_id", "n"])
     chunks["mid_min"] = (chunks["start_s"] + chunks["end_s"]) / 2 / 60
 
-    return Frames(vitals, buckets, sleep, acts, splits, chunks, _df(ds, "meals"), _df(ds, "medicines"))
+    # Meals belong to sleep-based days (a snack at 00:45 before bed counts for the day before).
+    meals = assign_days(_df(ds, "meals"), sleep)
+    return Frames(vitals, buckets, sleep, acts, splits, chunks, meals, _df(ds, "medicines"))
