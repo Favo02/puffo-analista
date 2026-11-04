@@ -39,7 +39,7 @@ def _folder_signature(folder: Path) -> tuple:
 
 
 @st.cache_data(show_spinner="Parsing exports…")
-def load(folder: str, _sig: tuple) -> tuple[Dataset, Frames]:
+def load(folder: str, sig: tuple) -> tuple[Dataset, Frames]:
     ds = load_folder(Path(folder))
     return ds, build(ds)
 
